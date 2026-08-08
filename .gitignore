@@ -1,0 +1,15 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Output binary build artifacts
+*.bin
+*.hex
+*.lst
+*.map
+
+# System/IDE clutter
+.DS_Store
+.vscode/
+.idea/
