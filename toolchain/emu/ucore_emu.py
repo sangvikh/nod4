@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-μ-Core Interactive Reference Emulator (Conforms to ISA v1.0.0 & ABI v1.0.0)
+μ-Core Interactive Reference Emulator (Conforms to ISA v1.1.0 & ABI v1.1.0)
 Simulates a μ-Core CPU with full instruction execution, hardware stack, and CLI debugger.
 """
 
@@ -15,28 +15,27 @@ class MicroCoreCPU:
         self.C = 0
         self.D = 0
 
-        # Special Registers
+        # Special Control Registers
         self.PC = 0           # Program Counter (8-bit)
         self.PR = 0           # Page Register (8-bit)
-        self.SP = 0           # Hardware Stack Pointer (0..15)
-        self.D_stack = 0      # Logical Stack Depth (0..16)
+        self.SP = 0           # Stack Pointer (0..15)
+        self.D_stack = 0      # Logical Stack Depth Counter (0..16)
         self.ZF = False       # Zero Flag
         self.CF = False       # Carry Flag
-        self.halted = False   # HLT state
+        self.halted = False   # CPU_State (HALTED / NORMAL)
 
-        # Memory Spaces
-        self.code_pages = {i: bytearray(256) for i in range(256)}  # 256 pages x 256 bytes
-        self.data_ram = {i: bytearray(256) for i in range(256)}    # 256 pages x 256 bytes
-        self.stack = [0] * 16                                      # 16-entry Hardware Stack
+        # Namespaces
+        self.code_pages = {i: bytearray(256) for i in range(256)}  # Instruction Space
+        self.data_ram = {i: bytearray(256) for i in range(256)}    # Data Space
+        self.stack = [0] * 16                                      # Hardware Stack Array (N=16)
         self.io_ports = [0] * 8                                    # 8 Peripheral I/O ports
 
     def reset(self):
+        """Hardware RESET Signal"""
         self.PR = 0
         self.PC = 0
         self.SP = 0
         self.D_stack = 0
-        self.ZF = False
-        self.CF = False
         self.halted = False
 
     def push_stack(self, val):
@@ -45,51 +44,58 @@ class MicroCoreCPU:
         if self.D_stack < 16:
             self.D_stack += 1
 
-    def pop_stack(self):
-        if self.D_stack == 0:
-            return 0  # Underflow returns 0
-        self.SP = (self.SP - 1 + 16) % 16
-        self.D_stack -= 1
-        return self.stack[self.SP]
+    def pop_raw(self):
+        """Unified Stack Pop Primitive (used by POP and RET)"""
+        if self.D_stack > 0:
+            self.SP = (self.SP - 1 + 16) % 16
+            self.D_stack -= 1
+            return self.stack[self.SP]
+        return 0  # Underflow returns 0; SP and D_stack remain 0
 
     def step(self):
         if self.halted:
             return
 
+        if self.PC % 2 != 0:
+            raise RuntimeError(f"Architecturally Invalid Operation: Odd PC target ({self.PC})")
+
+        # Phase T0 & T1: Instruction Fetch
         code = self.code_pages[self.PR]
-        opcode = code[self.PC] & 0x0F
-        operand = code[self.PC + 1]
-        next_pc = (self.PC + 2) & 0xFF
+        opcode_su = code[self.PC] & 0x0F
+        operand_su = code[self.PC + 1]
 
-        # -------------------------------------------------------------
-        # INSTRUCTION DECODER
-        # -------------------------------------------------------------
-        if opcode == 0x0: # NOP
-            self.PC = next_pc
+        # Evaluate Canonical Sequential PC
+        pc_raw = self.PC + 2
+        next_pc = pc_raw & 0xFF
+        next_pr = (self.PR + 1) & 0xFF if pc_raw >= 256 else self.PR
 
-        elif opcode == 0x1: # MOV
-            src_id = operand & 0x03
-            dst_id = (operand >> 2) & 0x03
+        # Phase T2 & T3: Execution & Atomic Commit
+        if opcode_su == 0x0: # NOP
+            self.PC, self.PR = next_pc, next_pr
+
+        elif opcode_su == 0x1: # MOV
+            src_id = (operand_su >> 2) & 0x03
+            dst_id = operand_su & 0x03
             vals = [self.A, self.B, self.C, self.D]
             src_val = vals[src_id]
             if dst_id == 0: self.A = src_val
             elif dst_id == 1: self.B = src_val
             elif dst_id == 2: self.C = src_val
             elif dst_id == 3: self.D = src_val
-            self.PC = next_pc
+            self.PC, self.PR = next_pc, next_pr
 
-        elif opcode == 0x2: # LOAD
-            addr = self.D if operand == 0xFF else operand
+        elif opcode_su == 0x2: # LOAD
+            addr = self.D if operand_su == 0xFF else operand_su
             self.A = self.data_ram[self.C][addr]
-            self.PC = next_pc
+            self.PC, self.PR = next_pc, next_pr
 
-        elif opcode == 0x3: # STORE
-            addr = self.D if operand == 0xFF else operand
+        elif opcode_su == 0x3: # STORE
+            addr = self.D if operand_su == 0xFF else operand_su
             self.data_ram[self.C][addr] = self.A
-            self.PC = next_pc
+            self.PC, self.PR = next_pc, next_pr
 
-        elif opcode == 0x4: # ALU
-            sub_op = operand & 0x0F
+        elif opcode_su == 0x4: # ALU
+            sub_op = operand_su & 0x0F
             a_orig = self.A
             b = self.B
 
@@ -103,7 +109,7 @@ class MicroCoreCPU:
                 res = a_orig - b
                 self.A = res & 0xFF
                 self.ZF = (self.A == 0)
-                self.CF = (a_orig >= b) # No-borrow
+                self.CF = (a_orig >= b) # No-borrow convention
 
             elif sub_op == 0x2: # ADC
                 carry_in = 1 if self.CF else 0
@@ -113,11 +119,11 @@ class MicroCoreCPU:
                 self.CF = (res >= 256)
 
             elif sub_op == 0x3: # SBB
-                borrow_in = 0 if self.CF else 1
-                res = a_orig - b - borrow_in
+                subtrahend = b + (0 if self.CF else 1)
+                res = a_orig - subtrahend
                 self.A = res & 0xFF
                 self.ZF = (self.A == 0)
-                self.CF = (a_orig >= (b + borrow_in))
+                self.CF = (a_orig >= subtrahend)
 
             elif sub_op == 0x4: # AND
                 self.A = (a_orig & b) & 0xFF
@@ -175,64 +181,71 @@ class MicroCoreCPU:
             elif sub_op == 0xF: # TST
                 self.ZF = (a_orig == 0)
 
-            self.PC = next_pc
+            self.PC, self.PR = next_pc, next_pr
 
-        elif opcode == 0x5: # JMP
-            self.PC = operand
+        elif opcode_su == 0x5: # JMP
+            if operand_su == 0xFF:
+                self.PR, self.PC = self.C, self.D
+            else:
+                self.PC, self.PR = operand_su, self.PR
 
-        elif opcode == 0x6: # JZ
-            self.PC = operand if self.ZF else next_pc
+        elif opcode_su == 0x6: # JZ
+            if self.ZF:
+                if operand_su == 0xFF: self.PR, self.PC = self.C, self.D
+                else: self.PC, self.PR = operand_su, self.PR
+            else: self.PC, self.PR = next_pc, next_pr
 
-        elif opcode == 0x7: # JC
-            self.PC = operand if self.CF else next_pc
+        elif opcode_su == 0x7: # JC
+            if self.CF:
+                if operand_su == 0xFF: self.PR, self.PC = self.C, self.D
+                else: self.PC, self.PR = operand_su, self.PR
+            else: self.PC, self.PR = next_pc, next_pr
 
-        elif opcode == 0x8: # CALL
+        elif opcode_su == 0x8: # CALL
+            if next_pr != self.PR:
+                raise RuntimeError("Architecturally Invalid Operation: CALL across page boundary")
             self.push_stack(next_pc)
-            self.PC = operand
+            self.PC, self.PR = operand_su, self.PR
 
-        elif opcode == 0x9: # RET
-            self.PC = self.pop_stack()
+        elif opcode_su == 0x9: # RET
+            self.PC = self.pop_raw()
+            # PR remains unchanged (page-local return)
 
-        elif opcode == 0xA: # PUSH
-            target = operand & 0x07
-            if target == 0: val = self.A
-            elif target == 1: val = self.B
-            elif target == 2: val = self.C
-            elif target == 3: val = self.D
-            elif target == 4: val = (1 if self.ZF else 0) | ((1 if self.CF else 0) << 1)
-            else: val = 0
-            self.push_stack(val)
-            self.PC = next_pc
+        elif opcode_su == 0xA: # PUSH
+            target = operand_su & 0x07
+            if target < 5:
+                vals = [self.A, self.B, self.C, self.D, (1 if self.ZF else 0) | ((1 if self.CF else 0) << 1)]
+                self.push_stack(vals[target])
+            # Target IDs 5, 6, 7 act strictly as NOP (no state change)
+            self.PC, self.PR = next_pc, next_pr
 
-        elif opcode == 0xB: # POP
-            val = self.pop_stack()
-            target = operand & 0x07
-            if target == 0: self.A = val
-            elif target == 1: self.B = val
-            elif target == 2: self.C = val
-            elif target == 3: self.D = val
-            elif target == 4:
-                self.ZF = bool(val & 1)
-                self.CF = bool((val >> 1) & 1)
-            self.PC = next_pc
+        elif opcode_su == 0xB: # POP
+            target = operand_su & 0x07
+            if target < 5:
+                val = self.pop_raw()
+                if target == 0: self.A = val
+                elif target == 1: self.B = val
+                elif target == 2: self.C = val
+                elif target == 3: self.D = val
+                elif target == 4:
+                    self.ZF = bool(val & 1)
+                    self.CF = bool((val >> 1) & 1)
+            # Target IDs 5, 6, 7 act strictly as NOP (no stack pop, no pointer change)
+            self.PC, self.PR = next_pc, next_pr
 
-        elif opcode == 0xC: # IO
-            port = operand & 0x07
-            direction = (operand >> 3) & 1
+        elif opcode_su == 0xC: # IO
+            port = operand_su & 0x07
+            direction = (operand_su >> 3) & 1
             if direction == 0: # IN
                 self.A = self.io_ports[port]
             else: # OUT
                 self.io_ports[port] = self.A
-            self.PC = next_pc
+            self.PC, self.PR = next_pc, next_pr
 
-        elif opcode == 0xD: # EXEC
-            self.PR = operand
-            self.PC = 0x00
+        elif opcode_su in (0xD, 0xE): # RSVD1, RSVD2 (Strict NOPs)
+            self.PC, self.PR = next_pc, next_pr
 
-        elif opcode == 0xE: # RSVD (NOP)
-            self.PC = next_pc
-
-        elif opcode == 0xF: # HLT
+        elif opcode_su == 0xF: # HLT
             self.halted = True
 
     def dump_state(self):
@@ -277,3 +290,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

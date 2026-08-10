@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-μ-Core Parameterized Two-Pass Assembler (Conforms to ISA v1.0.0 & ABI v1.0.0)
+μ-Core Parameterized Two-Pass Assembler (Conforms to ISA v1.1.0 & ABI v1.1.0)
 Supports both μ4 (4-bit) and μ8 (8-bit) hardware architectures.
 """
 
@@ -10,10 +10,10 @@ import re
 import argparse
 
 OPCODES = {
-    'NOP': 0x0, 'MOV': 0x1, 'LOAD': 0x2, 'STORE': 0x3,
-    'ALU': 0x4, 'JMP': 0x5, 'JZ': 0x6,   'JC': 0x7,
-    'CALL': 0x8, 'RET': 0x9, 'PUSH': 0xA,  'POP': 0xB,
-    'IO': 0xC,  'EXEC': 0xD, 'RSVD': 0xE, 'HLT': 0xF
+    'NOP': 0x0,   'MOV': 0x1,   'LOAD': 0x2,  'STORE': 0x3,
+    'ALU': 0x4,   'JMP': 0x5,   'JZ': 0x6,    'JC': 0x7,
+    'CALL': 0x8,  'RET': 0x9,   'PUSH': 0xA,  'POP': 0xB,
+    'IO': 0xC,    'RSVD1': 0xD, 'RSVD2': 0xE, 'HLT': 0xF
 }
 
 ALU_OPS = {
@@ -25,20 +25,19 @@ ALU_OPS = {
 
 REG_MAP = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'FLAGS': 4}
 
-# Architecture Target Configuration
 TARGET_CONFIGS = {
     'mu4': {
-        'word_size': 4,
+        'su_size': 4,
         'mask': 0x0F,
-        'page_size': 16,            # 16 nibbles per page
+        'page_size': 16,            # 16 nibble storage units per page
         'literal_start': 0x0E,      # Literal pool at $E..$F
         'literal_max': 0x0F,
         'stack_depth': 4,           # N=4 Hardware Stack Depth
     },
     'mu8': {
-        'word_size': 8,
+        'su_size': 8,
         'mask': 0xFF,
-        'page_size': 256,           # 256 bytes per page
+        'page_size': 256,           # 256 byte storage units per page
         'literal_start': 0xF0,      # Literal pool at $F0..$FE
         'literal_max': 0xFF,
         'stack_depth': 16,          # N=16 Hardware Stack Depth
@@ -98,12 +97,14 @@ class MicroCoreAssembler:
                 lit_offset = self.literal_pool[val]
                 cleaned_tokens.append(('LOAD', [f"${lit_offset:02X}"], pc))
                 pc += 2
+            elif mnemonic == 'EXEC':
+                raise SyntaxError("Opcode 'EXEC' is deprecated in ISA v1.1.0. Use 'JMP [D]' or 'JMP MAX' for far branches.")
             else:
                 cleaned_tokens.append((mnemonic, tokens[1:], pc))
                 pc += 2
 
             if pc > self.config['page_size']:
-                raise MemoryError(f"Program exceeds maximum single-page size for {self.target} ({self.config['page_size']} words)")
+                raise MemoryError(f"Program exceeds maximum single-page size for {self.target} ({self.config['page_size']} storage units)")
 
         # --- PASS 2: Code Generation ---
         binary_image = bytearray(self.config['page_size'])
@@ -113,7 +114,7 @@ class MicroCoreAssembler:
             opcode = OPCODES[mnemonic]
             operand = 0
 
-            if mnemonic in ['NOP', 'RET', 'HLT']:
+            if mnemonic in ['NOP', 'RET', 'RSVD1', 'RSVD2', 'HLT']:
                 operand = 0x00
 
             elif mnemonic == 'MOV':
@@ -126,14 +127,23 @@ class MicroCoreAssembler:
 
             elif mnemonic in ['LOAD', 'STORE']:
                 arg = args[0].upper()
-                if arg == '[D]':
+                if arg in ('[D]', 'MAX'):
                     operand = self.config['mask']
                 elif arg in self.symbol_table:
                     operand = self.symbol_table[arg]
                 else:
                     operand = self.parse_number(arg)
 
-            elif mnemonic in ['JMP', 'JZ', 'JC', 'CALL', 'EXEC']:
+            elif mnemonic in ['JMP', 'JZ', 'JC']:
+                arg = args[0].upper()
+                if arg in ('[D]', 'MAX'):
+                    operand = self.config['mask']
+                elif arg in self.symbol_table:
+                    operand = self.symbol_table[arg]
+                else:
+                    operand = self.parse_number(arg)
+
+            elif mnemonic == 'CALL':
                 target = args[0]
                 if target in self.symbol_table:
                     operand = self.symbol_table[target]
@@ -155,13 +165,27 @@ class MicroCoreAssembler:
         return bytes(binary_image), literal_init_bytes
 
 def main():
-    parser = argparse.ArgumentParser(description="μ-Core Assembler (Supports μ4 and μ8)")
+    parser = argparse.ArgumentParser(description="μ-Core Assembler (Supports μ4 and μ8; ISA v1.1.0)")
     parser.add_argument("source", help="Path to assembly source file")
-    parser.add_argument("-o", "--output", help="Output binary path")
+    parser.add_argument("-o", "--output", help="Output binary path or output directory")
     parser.add_argument("-t", "--target", choices=['mu4', 'mu8'], default='mu8', help="Target hardware architecture (default: mu8)")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose listing output")
 
     args = parser.parse_args()
-    out_path = args.output if args.output else os.path.splitext(args.source)[0] + f"_{args.target}.bin"
+
+    # Resolve output file path / directory
+    if args.output:
+        if os.path.isdir(args.output) or args.output.endswith('/') or args.output.endswith('\\'):
+            os.makedirs(args.output, exist_ok=True)
+            base_name = os.path.splitext(os.path.basename(args.source))[0] + ".bin"
+            out_path = os.path.join(args.output, base_name)
+        else:
+            out_dir = os.path.dirname(args.output)
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
+            out_path = args.output
+    else:
+        out_path = os.path.splitext(args.source)[0] + f"_{args.target}.bin"
 
     with open(args.source, 'r') as f:
         src_text = f.read()
@@ -173,14 +197,16 @@ def main():
         f.write(code_bin)
 
     print(f"Successfully assembled for [{args.target.upper()}]: {args.source} -> {out_path}")
-    print("\n=== ASSIGNED SYMBOL TABLE ===")
-    for label, addr in asm.symbol_table.items():
-        print(f"  {label:<12} -> 0x{addr:02X}")
 
-    if lit_bytes:
-        print(f"\n=== GENERATED LITERAL DATA POOL ({args.target.upper()}) ===")
-        for offset, val in lit_bytes.items():
-            print(f"  Data RAM [0x{offset:02X}] = 0x{val:02X} ({val})")
+    if args.verbose or True:
+        print("\n=== ASSIGNED SYMBOL TABLE ===")
+        for label, addr in asm.symbol_table.items():
+            print(f"  {label:<12} -> 0x{addr:02X}")
+
+        if lit_bytes:
+            print(f"\n=== GENERATED LITERAL DATA POOL ({args.target.upper()}) ===")
+            for offset, val in lit_bytes.items():
+                print(f"  Data RAM [0x{offset:02X}] = 0x{val:02X} ({val})")
 
 if __name__ == '__main__':
     main()

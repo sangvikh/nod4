@@ -1,10 +1,11 @@
 ; ===================================================================
 ; Example 1: Sum Numbers from 1 to 5
+; Conforms to μ-Core ISA v1.1.0 & ABI v1.1.0
 ; Accumulator A holds running sum; Register B holds index counter
 ; ===================================================================
 
 INIT:
-    MOV B, A            ; B <- A
+    MOV B, A            ; Copy A into B
     ALU XOR             ; A <- A XOR B (Clear Accumulator A = 0)
     STORE $10           ; RAM[C:$10] = 0 (Initialize Sum in Data RAM)
     
@@ -28,3 +29,4 @@ LOOP:
 DONE:
     LOAD $10            ; Bring final result (15 / $0F) into Accumulator A
     HLT                 ; Halt CPU execution
+
