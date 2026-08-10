@@ -1,66 +1,50 @@
 # The μ-Core Architecture Manifesto & Hardware Primer
 
-*"A simple computer architecture designed to outlive its
-implementation."*
+*"A simple computer architecture designed to outlive its implementation."*
 
-------------------------------------------------------------------------
+---
 
 ## Welcome to μ-Core!
 
-μ-Core is a minimalist, parameterized Instruction Set Architecture (ISA)
-engineered for long-term stability, hardware economy, and complete
-binary determinism.
+μ-Core is a minimalist, parameterized Instruction Set Architecture (ISA) engineered for long-term stability, hardware economy, and complete binary determinism.
 
-While the formal **ISA Specification (v1.1.0)** and **ABI Specification
-(v1.1.0)** define the rigid normative standards for hardware builders
-and toolchain authors, this primer provides the pedagogical narrative,
-architectural rationale, and hardware tricks that make μ-Core tick.
+While the formal **ISA Specification (v1.1.0)** and **ABI Specification (v1.1.0)** define the rigid normative standards for hardware builders and toolchain authors, this primer provides the pedagogical narrative, architectural rationale, and hardware tricks that make μ-Core tick.
 
-------------------------------------------------------------------------
+---
 
 ## 1. The Core Philosophy
 
 ### 1. Modules Before Gates
 
-Rather than designing around individual logic gates, μ-Core specifies
-self-contained functional modules connected by standardized buses:
+Rather than designing around individual logic gates, μ-Core specifies self-contained functional modules connected by standardized buses:
 
-- **Accumulator & ALU Block** ($A, B, FLAGS$)
-- **Instruction Counter Block** ($PR:\text{PC}$)
-- **Data RAM Addressing Block** ($C:D$)
-- **Hardware Stack Controller** ($SP, D_{stack}$)
+* **Accumulator & ALU Block** (A, B, FLAGS)
+* **Instruction Counter Block** (PR:PC)
+* **Data RAM Addressing Block** (C:D)
+* **Hardware Stack Controller** (SP, D_stack)
 
-You can build your ALU out of 74HC TTL chips today, replace it with
-discrete transistors tomorrow, and run an FPGA implementation next
-week—**without changing a single byte of compiled software**.
+You can build your ALU out of 74HC TTL chips today, replace it with discrete transistors tomorrow, and run an FPGA implementation next week—**without changing a single byte of compiled software**.
 
 ### 2. Predictability Over Maximum Efficiency
 
-Modern CPUs introduce complex pipeline stalls, out-of-order execution,
-and non-uniform instruction timings. μ-Core prioritizes absolute
-determinism:
+Modern CPUs introduce complex pipeline stalls, out-of-order execution, and non-uniform instruction timings. μ-Core prioritizes absolute determinism:
 
-- **Fixed 2-Storage-Unit Instructions** ($2W$ bits:
-  $\text{Opcode} + \text{Operand}$) across all datapath widths $W$.
-- **Uniform 4-Phase Architectural Cycles ($T_0, T_1, T_2, T_3$)** for
-  every instruction.
-- **Explicit Snapshot Mechanics:** State transitions sample snapshot
-  variables at $T_2$ and commit atomically at $T_3$.
+* **Fixed 2-Storage-Unit Instructions** (2W bits: Opcode + Operand) across all datapath widths W.
+* **Uniform 4-Phase Architectural Cycles (T0, T1, T2, T3)** for every instruction.
+* **Explicit Snapshot Mechanics:** State transitions sample snapshot variables at T2 and commit atomically at T3.
 
-------------------------------------------------------------------------
+---
 
 ## 2. Hardware Design Highlights & TTL Tricks
 
-### Trick \#1: $C:D$ Addressing (64 KiB Space, 8-Bit Datapath)
+### Trick #1: C:D Addressing (64 KiB Space, 8-Bit Datapath)
 
-Addressing 64 KiB of Data RAM on an 8-bit datapath without a 16-bit
-adder is accomplished by splitting address generation across two
-ordinary 8-bit registers:
+Addressing 64 KiB of Data RAM on an 8-bit datapath without a 16-bit adder is accomplished by splitting address generation across two ordinary 8-bit registers:
 
-- **Register `C` (High Byte):** Serves as the static Data Page selector.
-- **Register `D` (Low Byte):** Serves as the fast offset pointer.
+* **Register `C` (High Byte):** Serves as the static Data Page selector.
+* **Register `D` (Low Byte):** Serves as the fast offset pointer.
 
-``` text
+```text
         16-bit Physical RAM Address Bus (A15 .. A0)
      ┌──────────────────────────┬──────────────────────────┐
      │ High Address (A15 .. A8) │  Low Address (A7 .. A0)  │
@@ -70,30 +54,21 @@ ordinary 8-bit registers:
          │  Register C Page │       │ Register D / Inst│
          │     (74HC574)    │       │   MUX (74HC157)  │
          └──────────────────┘       └──────────────────┘
+
 ```
 
-The output of Register `C` wires directly to address pins
-$\text{A}_{15}..\text{A}_8$ of the Data RAM chip. Address pins
-$\text{A}_7..\text{A}_0$ are fed by a 2-to-1 Multiplexer
-($74\text{HC}157$) switching between the instruction operand byte (for
-direct access `LOAD $05`) and Register `D` (for indirect access
-`LOAD [D]`).
+The output of Register `C` wires directly to address pins A15..A8 of the Data RAM chip. Address pins A7..A0 are fed by a 2-to-1 Multiplexer (74HC157) switching between the instruction operand byte (for direct access `LOAD $05`) and Register `D` (for indirect access `LOAD [D]`).
 
-------------------------------------------------------------------------
+---
 
-### Trick \#2: The `$FF` Dual Escape Sentinel
+### Trick #2: The `$FF` Dual Escape Sentinel
 
-In μ-Core, the sentinel value **`$FF` (or `MAX`)** provides two
-fundamental escape capabilities with zero extra opcode bloat:
+In μ-Core, the sentinel value **`$FF` (or `MAX`)** provides two fundamental escape capabilities with zero extra opcode bloat:
 
-1.  **Indirect Memory Gateway (`LOAD MAX` / `STORE MAX`):** Switches the
-    Data RAM address MUX to select Register `D`, accessing location
-    $C:D$.
-2.  **Cross-Page Far Jump (`JMP MAX` / `JZ MAX` / `JC MAX`):** Sets Page
-    Register $PR \leftarrow C$ and Program Counter
-    $\text{PC} \leftarrow D$.
+1. **Indirect Memory Gateway (`LOAD MAX` / `STORE MAX`):** Switches the Data RAM address MUX to select Register `D`, accessing location C:D.
+2. **Cross-Page Far Jump (`JMP MAX` / `JZ MAX` / `JC MAX`):** Sets Page Register PR <- C and Program Counter PC <- D.
 
-``` text
+```text
  Operand Bus (D7 .. D0)
  ───┬───┬───┬───┬───┬───┬───┬───
     │   │   │   │   │   │   │   │
@@ -103,37 +78,36 @@ fundamental escape capabilities with zero extra opcode bloat:
                  │ (Low when Operand == $FF)
                  ▼
         Addr MUX Select Line ──────► [ 0 = Instruction Operand | 1 = Register D ]
+
 ```
 
-------------------------------------------------------------------------
+---
 
-### Trick \#3: 2-Bit Opcode Class Decoding (ISA v1.1.0)
+### Trick #3: 2-Bit Opcode Class Decoding (ISA v1.1.0)
 
-Primary opcodes are logically grouped by their top two bits
-(`bits [3:2]`), simplifying instruction decoding:
+Primary opcodes are logically grouped by their top two bits (`bits [3:2]`), simplifying instruction decoding:
 
-| Opcode Class (`[3:2]`) | Primary Opcodes                              | Functional Category        | Hardware Subsystem Triggered                                  |
-|------------------------|----------------------------------------------|----------------------------|---------------------------------------------------------------|
-| **`00xx`**             | `0x0`..`0x3` (`NOP`, `MOV`, `LOAD`, `STORE`) | **Memory & Register Data** | Triggers Register File bus / Data RAM Read/Write lines.       |
-| **`01xx`**             | `0x4`..`0x7` (`ALU`, `JMP`, `JZ`, `JC`)      | **ALU & Control Branches** | Enables ALU function generator or PC branch target load.      |
-| **`10xx`**             | `0x8`..`0xB` (`CALL`, `RET`, `PUSH`, `POP`)  | **Stack & Call Control**   | Direct active-high enable for Hardware Stack Pointer ($SP$).  |
-| **`11xx`**             | `0xC`..`0xF` (`IO`, `RSVD1`, `RSVD2`, `HLT`) | **System Control & I/O**   | Activates Peripheral I/O bus or halts timing clock generator. |
+| Opcode Class (`[3:2]`) | Primary Opcodes | Functional Category | Hardware Subsystem Triggered |
+| --- | --- | --- | --- |
+| **`00xx`** | `0x0`..`0x3` (`NOP`, `MOV`, `LOAD`, `STORE`) | **Memory & Register Data** | Triggers Register File bus / Data RAM Read/Write lines. |
+| **`01xx`** | `0x4`..`0x7` (`ALU`, `JMP`, `JZ`, `JC`) | **ALU & Control Branches** | Enables ALU function generator or PC branch target load. |
+| **`10xx`** | `0x8`..`0xB` (`CALL`, `RET`, `PUSH`, `POP`) | **Stack & Call Control** | Direct active-high enable for Hardware Stack Pointer (SP). |
+| **`11xx`** | `0xC`..`0xF` (`IO`, `RSVD1`, `RSVD2`, `HLT`) | **System Control & I/O** | Activates Peripheral I/O bus or halts timing clock generator. |
 
-------------------------------------------------------------------------
+---
 
 ## 3. Annotated Bus Walkthroughs
 
 ### Example 1: Summing Numbers in a Loop (1 to 5)
 
-Data RAM initialization: Literal constant `$05` is pre-stored at offset
-`$F0` in Data RAM page $C$.
+Data RAM initialization: Literal constant `$05` is pre-stored at offset `$F0` in Data RAM page C.
 
-``` assembly
+```assembly
 ; Offset  Opcode  Operand   Mnemonic       Bus Behavior & Hardware State
 ; -------------------------------------------------------------------
 ; 0x00    0x1     0x01      MOV B, A       ; Copy A into B (Flags unchanged)
 ; 0x02    0x4     0x06      ALU XOR        ; A <- A XOR B (Clears Accumulator A = 0)
-; 0x04    0x3     0x10      STORE $10      ; RAM[C:$10] <- 0 (Initialize sum in RAM)  ; 0x06    0x2     0xF0      LOAD$F0       ; A <- 5 (Fetch pre-stored literal $05)
+; 0x04    0x3     0x10      STORE $10      ; RAM[C:$10] <- 0 (Initialize sum in RAM)  ; 0x06    0x2     0xF0      LOAD $F0       ; A <- 5 (Fetch pre-stored literal $05)
 ; 0x08    0x1     0x01      MOV B, A       ; B <- 5 (Set B as loop index counter)
 ;
 ; --- LOOP HEAD (Offset 0x0A) ---
@@ -149,21 +123,20 @@ Data RAM initialization: Literal constant `$05` is pre-stored at offset
 ; --- DONE (Offset 0x1A) ---
 ; 0x1A    0x2     0x10      LOAD $10       ; Load final sum (15 / $0F) into Accumulator A
 ; 0x1C    0xF     0x00      HLT            ; Freeze execution clock phases
+
 ```
 
-------------------------------------------------------------------------
+---
 
 ### Example 2: Page-Local Subroutine Call (`CALL` / `RET`)
 
-Pursuant to **ABI v1.1.0**, Register `A` passes arguments, Register `B`
-holds secondary arguments, and Register `C` is strictly callee-saved.
-Pre-stored literal `$07` resides at `$F0`.
+Pursuant to **ABI v1.1.0**, Register `A` passes arguments, Register `B` holds secondary arguments, and Register `C` is strictly callee-saved. Pre-stored literal `$07` resides at `$F0`.
 
-``` assembly
+```assembly
 ; Offset  Opcode  Operand   Mnemonic       Bus Behavior & Hardware State
 ; -------------------------------------------------------------------
 ; --- MAIN ROUTINE ---
-; 0x00    0x2     0xF0      LOAD $F0       ; A <- 7 (Fetch parameter from$F0)
+; 0x00    0x2     0xF0      LOAD $F0       ; A <- 7 (Fetch parameter from $F0)
 ; 0x02    0x8     0x08      CALL $08       ; Hardware Stack[SP] <- 0x04; PC <- 0x08
 ; 0x04    0x3     0x20      STORE $20      ; Store returned result (14 / $0E) to RAM
 ; 0x06    0xF     0x00      HLT            ; Freeze execution clock
@@ -174,17 +147,16 @@ Pre-stored literal `$07` resides at `$F0`.
 ; 0x0C    0x4     0x00      ALU ADD        ; A <- A + B (7 + 7 = 14)
 ; 0x0E    0xB     0x02      POP C          ; Restore caller's Data High Register C
 ; 0x10    0x9     0x00      RET            ; PC <- Popped return address (0x04)
+
 ```
 
-------------------------------------------------------------------------
+---
 
 ### Example 3: Cross-Page Domain Transfer (`JMP MAX`)
 
-Demonstrates a cross-page domain switch between Application Domain
-(Page 1) and Math Domain (Page 2) using `JMP MAX` (`0x05 0xFF`).
-Pre-stored literal `$42` resides at `$F0`.
+Demonstrates a cross-page domain switch between Application Domain (Page 1) and Math Domain (Page 2) using `JMP MAX` (`0x05 0xFF`). Pre-stored literal `$42` resides at `$F0`.
 
-``` assembly
+```assembly
 ; ===================================================================
 ; INSTRUCTION PAGE 0x01 (APPLICATION DOMAIN)
 ; ===================================================================
@@ -215,24 +187,17 @@ Pre-stored literal `$42` resides at `$F0`.
 ; 0x0A    0x2     0xF4      LOAD $F4       ; Load Page 1 return offset (0x0E)
 ; 0x0C    0x1     0x0C      MOV D, A       ; D <- 0x0E (Set return offset)
 ; 0x0E    0x5     0xFF      JMP [D]        ; Far Return! PR <- C (1), PC <- D (0x0E)
+
 ```
 
-------------------------------------------------------------------------
+---
 
 ## 4. Where to Go From Here?
 
-Now that you have the conceptual mental model and explicit bus
-semantics, you are ready to dive into the exact engineering standards or
-build software toolchains:
+Now that you have the conceptual mental model and explicit bus semantics, you are ready to dive into the exact engineering standards or build software toolchains:
 
-1.  **Read the Formal ISA Specification (v1.1.0):** Complete bit-level
-    definitions of all 16 opcodes, 16 ALU operations, flag semantics,
-    and stack underflow/overflow rules.
-2.  **Read the Application Binary Interface (v1.1.0):** Register
-    preservation rules, caller/callee contracts, shared mailbox
-    structures, and assembly idioms.
-3.  **Run the Assembler Toolchain:** Use `ucore_asm.py` to translate
-    assembly source files directly into binary instruction images and
-    literal pool initializers.
+1. **Read the Formal ISA Specification (v1.1.0):** Complete bit-level definitions of all 16 opcodes, 16 ALU operations, flag semantics, and stack underflow/overflow rules.
+2. **Read the Application Binary Interface (v1.1.0):** Register preservation rules, caller/callee contracts, shared mailbox structures, and assembly idioms.
+3. **Run the Assembler Toolchain:** Use `ucore_asm.py` to translate assembly source files directly into binary instruction images and literal pool initializers.
 
 **Welcome to μ-Core! Have fun building software and wiring chips!**
