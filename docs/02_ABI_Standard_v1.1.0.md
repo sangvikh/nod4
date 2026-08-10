@@ -21,8 +21,8 @@ Software conventions are organized into three distinct, normative layers:
 ┌──────────────────────────────────┴─────────────────────────────────────┐
 │ Layer 2: Cross-Page Transfer Protocols (JMP MAX)                       │
 │ • Direct Coordinate Far Jumps (JMP MAX / JZ MAX / JC MAX)              │
-│ • Stack-Based Far Call & Return Protocol                               │
-│ • Memory-Topology Agnostic Parameter Passing                           │
+│ • Stack-Based Far Call & Reentrant Return Protocol                     │
+│ • Memory-Topology Agnostic Parameter Passing & Register Volatility     │
 └──────────────────────────────────┬─────────────────────────────────────┘
                                    │
 ┌──────────────────────────────────┴─────────────────────────────────────┐
@@ -98,34 +98,55 @@ Data Page C = $00 may reside in Read-Only Memory (ROM) alongside boot instructio
 
 #### Stack-Based Far Call Protocol
 
-Because the Hardware Stack is a unified global namespace that persists across Page Register (PR) switches, cross-page subroutine calls use the Hardware Stack for reentrant return tracking:
+Because the Hardware Stack is a unified global namespace that persists across Page Register (PR) switches, cross-page subroutine calls use the Hardware Stack for reentrant return tracking.
 
-1. **Push Return Coordinates:** The caller pushes its Return Page ID (PR_caller) first, followed by its Return Offset (PC_return) onto the Hardware Stack.
-2. **Pass Parameters:** Scalar parameters are passed in registers `A` and `B`. Multi-byte or buffer parameters are passed as a pointer coordinate (`C:D`) referencing caller-owned RAM.
-3. **Far Jump:** The caller sets C <- C_target and D <- D_target, then executes `JMP [D]` (`JMP MAX`).
-4. **Far Return:** The target service pops PC_return into Register `D`, pops PR_caller into Register `C`, and executes `JMP [D]` (`JMP MAX`) to return control directly to the caller.
+##### 1. Stack Order & LIFO Layout
+
+The caller pushes Return Page ID (PR_return) **first**, followed by Return Offset (PC_return) **second**. The callee pops PC_return into Register `D` **first**, and PR_return into Register `C` **second**:
+
+```text
+  Hardware Stack (LIFO Order)
+  ┌──────────────────────────────────────────┐
+  │ Top of Stack ->  PC_return  (Pushed 2nd) │ ──> Popped 1st into D
+  │                  PR_return  (Pushed 1st) │ ──> Popped 2nd into C
+  └──────────────────────────────────────────┘
+
+```
+
+##### 2. Step-by-Step Far Call Procedure
+
+1. **Push Return Coordinates:** Caller executes `PUSH PR_return`, then `PUSH PC_return`.
+2. **Setup Target Coordinates:** Caller sets Register `C` <- Target Page ID, Register `D` <- Target Offset.
+3. **Execute Far Jump:** Caller executes `JMP MAX` (`JMP [D]`).
+4. **Execute Far Return:** Target service executes `POP D` (restoring PC_return), `POP C` (restoring PR_return), and `JMP MAX` (`JMP [D]`), or uses the assembler pseudo-instruction `FRET`.
+
+#### Register Volatility, FLAGS, & Pointer Parameters
+
+* **C and D Volatility:** Registers `C` and `D` are **clobbered by the caller during far call setup**. Unlike local calls where `C` is callee-saved, far calls destroy caller values in `C` and `D`.
+* **FLAGS Volatility:** FLAGS (ZF, CF) are caller-saved across far calls.
+* **Stack Depth Limits:** Far calls push two entries onto the stack. For a stack depth of N entries, the maximum far call nesting depth is floor(N / 2). Software must ensure stack limits are respected.
+* **Pointer & Buffer Ownership:** Multi-byte datasets or struct arguments are passed as pointer coordinates in RAM. Pointer memory is caller-owned; callees may read or modify buffer contents, but callers retain memory lifetime management.
+* **Passing Pointers across Far Calls:** Because Register `C` is required for the target Page ID during `JMP MAX`, pointer high-page addresses must be passed in Register `B` (e.g., Buffer Page in `B`, Buffer Offset in `D`, Target Page loaded into `C` last).
 
 ```assembly
 ; ===================================================================
 ; CALLER DOMAIN (Page PR = $01)
 ; Invoking MATH_ADD on Page $02 at Offset $10
 ; ===================================================================
-    ; 1. Push Far Return Coordinates onto Hardware Stack
-    LI A, #$01          ; Return Page ID (PR = $01)
+    ; 1. Push Far Return Coordinates onto Hardware Stack (PR first, PC second)
+    LI A, #$01          ; PR_return = $01
     PUSH A              ; Stack[0] <- PR_return
-    LI A, #RESUME       ; Return Offset
+    LI A, #RESUME       ; PC_return = RESUME offset
     PUSH A              ; Stack[1] <- PC_return
 
     ; 2. Pass scalar arguments in A and B
-    LI A, #15
-    LI B, #27
+    LI A, #15           ; Argument 1
+    LI B, #27           ; Argument 2
 
-    ; 3. Far Jump directly to service coordinate (Page $02, Offset $10)
-    LI A, #$02
-    MOV C, A            ; C <- Target Page ID ($02)
-    LI A, #$10
-    MOV D, A            ; D <- Target Offset ($10)
-    JMP [D]             ; Far Jump! PR <- $02, PC <- $10
+    ; 3. Setup Far Jump target (PR = $02, PC = $10)
+    LI C, #$02          ; C <- Target Page ID ($02)
+    LI D, #$10          ; D <- Target Entry Offset ($10)
+    JMP MAX             ; Far Jump! PR <- $02, PC <- $10
 
 RESUME:
     ; Execution resumes here; result is waiting in Accumulator A
@@ -138,10 +159,8 @@ RESUME:
 MATH_ADD:
     ALU ADD             ; A <- A + B (15 + 27 = 42)
 
-    ; --- REENTRANT FAR RETURN ---
-    POP D               ; D <- PC_return (Popped first!)
-    POP C               ; C <- PR_return (Popped second!)
-    JMP [D]             ; Far Return! PR <- C, PC <- D
+    ; --- REENTRANT FAR RETURN (via FRET pseudo-instruction or explicit pops) ---
+    FRET                ; Expands to: POP D -> POP C -> JMP MAX
 
 ```
 
@@ -149,11 +168,12 @@ MATH_ADD:
 
 ### 4. Layer 3: Canonical Assembly & Toolchain Conventions
 
-#### Toolchain Pseudo-Instruction (`LI`)
+#### Toolchain Pseudo-Instructions (`LI`, `FRET`)
 
-A conforming assembler provides a **`LI A, #value`** (Load Immediate) pseudo-instruction.
+A conforming assembler provides standard toolchain abstractions:
 
-* `LI` is a toolchain abstraction, generating a `LOAD $literal_offset` primitive.
+* **`LI reg, #value` (Load Immediate):** Generates a `LOAD $literal_offset` primitive into Accumulator A, followed by a `MOV reg, A` if target is not `A`.
+* **`FRET` (Far Return):** Generates the 3-instruction return sequence: `POP D` -> `POP C` -> `JMP MAX`.
 * **Literal Data Pool Invariant:** Literal values are allocated sequentially within offsets **`$F0..$FE`** of the module's Data Page.
 
 #### Multi-Byte Arithmetic Mechanics (W=8)
