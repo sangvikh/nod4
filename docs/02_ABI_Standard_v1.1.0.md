@@ -19,10 +19,10 @@ Software conventions are organized into three distinct, normative layers:
 └──────────────────────────────────┬─────────────────────────────────────┘
                                    │
 ┌──────────────────────────────────┴─────────────────────────────────────┐
-│ Layer 2: Cross-Page & Domain Transfer Protocols (JMP MAX)              │
-│ • Cross-Page Far Jumps (JMP MAX / JZ MAX / JC MAX)                     │
-│ • Far Call/Return Control Block Conventions                            │
-│ • Shared Mailbox Protocol (C = $00)                                    │
+│ Layer 2: Cross-Page Transfer Protocols (JMP MAX)                       │
+│ • Direct Coordinate Far Jumps (JMP MAX / JZ MAX / JC MAX)              │
+│ • Stack-Based Far Call & Return Protocol                               │
+│ • Memory-Topology Agnostic Parameter Passing                           │
 └──────────────────────────────────┬─────────────────────────────────────┘
                                    │
 ┌──────────────────────────────────┴─────────────────────────────────────┐
@@ -86,32 +86,62 @@ ADD_FIVE:
 
 ### 3. Layer 2: Cross-Page Transfer Protocols (`JMP MAX`)
 
-Under **ISA v1.1.0**, hardware `CALL` and `RET` operations are strictly page-local (preserving Page Register PR). Cross-page domain transfers and far jumps are executed natively using the `MAX` escape sentinel (`$FF` on μ8):
+Under **ISA v1.1.0**, hardware `CALL` and `RET` instructions operate strictly page-locally (preserving Page Register PR). Cross-page execution transfers and far calls execute natively using the `MAX` escape sentinel (`$FF` on μ8):
 
 JMP MAX => PR <- C_orig, PC <- D_orig
 
-#### Cross-Page Subroutine / Far Return Convention
+#### Hardware Reset Vector Invariant
 
-Because `JMP MAX` is an unconditional control transfer that does not push a return address, cross-page function calls rely on software cooperation via the **Shared Mailbox**:
+Hardware `RESET` unconditionally forces PR <- $00 and PC <- $00. Instruction Page 0 Offset `$00` is strictly reserved as the **Hardware Reset & Boot Vector**. Software shall place system initialization logic starting at Offset `$00`.
 
-1. **Setup Far Return Address:** Prior to executing a far jump, the calling domain writes its Return Page ID (PR_caller) and Return Offset (PC_return) into the designated Mailbox Control Block.
-2. **Execute Far Jump:** The caller sets C <- C_target and D <- D_target, then executes `JMP [D]` (`JMP MAX`).
-3. **Execute Far Return:** Upon completion, the target domain reads the caller's return destination into C and D, then executes `JMP [D]` (`JMP MAX`) to resume caller execution.
+Data Page C = $00 may reside in Read-Only Memory (ROM) alongside boot instruction code. Software shall not assume Data Page C = $00 is writable RAM.
 
-#### Shared Mailbox Protocol & Layout
+#### Stack-Based Far Call Protocol
 
-Data Page C = $00 offsets `$00..$0F` are designated as the **Shared System Mailbox**:
+Because the Hardware Stack is a unified global namespace that persists across Page Register (PR) switches, cross-page subroutine calls use the Hardware Stack for reentrant return tracking:
 
-```text
-  Data Space (Page C = $00)
-  +─────────────────────────────────────────+
-  | Offset $00      : Syscall / Command ID  | <── Command Identifier
-  | Offset $01      : Return Page ID (PR)   | <── Far Return Destination Page
-  | Offset $02      : Return Offset (PC)    | <── Far Return Destination Offset
-  | Offset $03      : Status / Response Code| <── Execution Result Status
-  | Offset $04..$0F : Parameter Payload     | <── Multi-byte Parameters
-  | Offset $10..$FF : Module Private RAM    | <── Workspace for Kernel / Page 0
-  +─────────────────────────────────────────+
+1. **Push Return Coordinates:** The caller pushes its Return Page ID (PR_caller) first, followed by its Return Offset (PC_return) onto the Hardware Stack.
+2. **Pass Parameters:** Scalar parameters are passed in registers `A` and `B`. Multi-byte or buffer parameters are passed as a pointer coordinate (`C:D`) referencing caller-owned RAM.
+3. **Far Jump:** The caller sets C <- C_target and D <- D_target, then executes `JMP [D]` (`JMP MAX`).
+4. **Far Return:** The target service pops PC_return into Register `D`, pops PR_caller into Register `C`, and executes `JMP [D]` (`JMP MAX`) to return control directly to the caller.
+
+```assembly
+; ===================================================================
+; CALLER DOMAIN (Page PR = $01)
+; Invoking MATH_ADD on Page $02 at Offset $10
+; ===================================================================
+    ; 1. Push Far Return Coordinates onto Hardware Stack
+    LI A, #$01          ; Return Page ID (PR = $01)
+    PUSH A              ; Stack[0] <- PR_return
+    LI A, #RESUME       ; Return Offset
+    PUSH A              ; Stack[1] <- PC_return
+
+    ; 2. Pass scalar arguments in A and B
+    LI A, #15
+    LI B, #27
+
+    ; 3. Far Jump directly to service coordinate (Page $02, Offset $10)
+    LI A, #$02
+    MOV C, A            ; C <- Target Page ID ($02)
+    LI A, #$10
+    MOV D, A            ; D <- Target Offset ($10)
+    JMP [D]             ; Far Jump! PR <- $02, PC <- $10
+
+RESUME:
+    ; Execution resumes here; result is waiting in Accumulator A
+    STORE $20
+    HLT
+
+; ===================================================================
+; TARGET SERVICE (Page PR = $02, Entry Offset $10)
+; ===================================================================
+MATH_ADD:
+    ALU ADD             ; A <- A + B (15 + 27 = 42)
+
+    ; --- REENTRANT FAR RETURN ---
+    POP D               ; D <- PC_return (Popped first!)
+    POP C               ; C <- PR_return (Popped second!)
+    JMP [D]             ; Far Return! PR <- C, PC <- D
 
 ```
 
@@ -149,3 +179,4 @@ Pursuant to **ISA v1.1.0 (Flag Preservation Law)**, non-ALU instructions (`LOAD`
     STORE $05           ; Store High Result
 
 ```
+

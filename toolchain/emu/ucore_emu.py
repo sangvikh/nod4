@@ -251,23 +251,37 @@ class MicroCoreCPU:
     def dump_state(self):
         flags = f"ZF={'1' if self.ZF else '0'} CF={'1' if self.CF else '0'}"
         status = "HALTED" if self.halted else "RUNNING"
-        print(f"[{status}] PR:0x{self.PR:02X} PC:0x{self.PC:02X} | A:0x{self.A:02X} B:0x{self.B:02X} C:0x{self.C:02X} D:0x{self.D:02X} | {flags} | SP:{self.SP} Depth:{self.D_stack}")
+        
+        # Format active stack items for easy inspection
+        active_stack = []
+        for idx in range(self.D_stack):
+            stk_idx = (self.SP - 1 - idx + 16) % 16
+            active_stack.append(f"0x{self.stack[stk_idx]:02X}")
+        stk_str = f"[{', '.join(active_stack)}]" if active_stack else "[]"
+        
+        print(f"[{status}] PR:0x{self.PR:02X} PC:0x{self.PC:02X} | A:0x{self.A:02X} B:0x{self.B:02X} C:0x{self.C:02X} D:0x{self.D:02X} | {flags} | SP:{self.SP} Depth:{self.D_stack} Stack:{stk_str}")
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 ucore_emu.py <code.bin> [page_id]")
+        print("Usage: python3 ucore_emu.py <code.bin[:page_id]> [code2.bin:page_id ...]")
+        print("Example: python3 ucore_emu.py main.bin worker.bin:1")
         sys.exit(1)
 
-    bin_path = sys.argv[1]
-    page_id = int(sys.argv[2]) if len(sys.argv) > 2 else 0
-
     cpu = MicroCoreCPU()
-    
-    with open(bin_path, 'rb') as f:
-        data = f.read()
-        cpu.code_pages[page_id][:len(data)] = data
 
-    print(f"Loaded {len(data)} bytes into Instruction Page 0x{page_id:02X}")
+    for arg in sys.argv[1:]:
+        if ':' in arg and not os.path.exists(arg):
+            bin_path, page_str = arg.rsplit(':', 1)
+            page_id = int(page_str, 0)
+        else:
+            bin_path = arg
+            page_id = 0
+
+        with open(bin_path, 'rb') as f:
+            data = f.read()
+            cpu.code_pages[page_id][:len(data)] = data
+            print(f"Loaded {len(data)} bytes into Instruction Page 0x{page_id:02X} ({bin_path})")
+
     print("Commands: [s]tep, [c]ontinue, [r]eset, [d]ump RAM, [q]uit")
 
     while True:
@@ -290,4 +304,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

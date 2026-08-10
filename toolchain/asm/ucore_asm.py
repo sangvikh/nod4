@@ -30,8 +30,8 @@ TARGET_CONFIGS = {
         'su_size': 4,
         'mask': 0x0F,
         'page_size': 16,            # 16 nibble storage units per page
-        'literal_start': 0x0E,      # Literal pool at $E..$F
-        'literal_max': 0x0F,
+        'literal_start': 0x0E,      # Literal pool at $E
+        'literal_max': 0x0E,        # $F reserved as MAX sentinel
         'stack_depth': 4,           # N=4 Hardware Stack Depth
     },
     'mu8': {
@@ -39,7 +39,7 @@ TARGET_CONFIGS = {
         'mask': 0xFF,
         'page_size': 256,           # 256 byte storage units per page
         'literal_start': 0xF0,      # Literal pool at $F0..$FE
-        'literal_max': 0xFF,
+        'literal_max': 0xFE,        # $FF reserved as MAX sentinel
         'stack_depth': 16,          # N=16 Hardware Stack Depth
     }
 }
@@ -87,18 +87,40 @@ class MicroCoreAssembler:
             mnemonic = tokens[0].upper()
 
             if mnemonic == 'LI':
+                dst_reg = tokens[1].upper()
                 val = self.parse_number(tokens[2].replace('#', ''))
+                
                 if val not in self.literal_pool:
+                    if self.literal_next_offset > self.config['literal_max']:
+                        raise MemoryError(f"Literal Pool Overflow in {self.target} Data Page! (Max offset $0x{self.config['literal_max']:02X})")
                     self.literal_pool[val] = self.literal_next_offset
                     self.literal_next_offset += 1
-                    if self.literal_next_offset > self.config['literal_max']:
-                        raise MemoryError(f"Literal Pool Overflow in {self.target} Data Page!")
                 
                 lit_offset = self.literal_pool[val]
+                # Load value into Accumulator A
                 cleaned_tokens.append(('LOAD', [f"${lit_offset:02X}"], pc))
                 pc += 2
+                
+                # If target is not Accumulator A, copy value into target register
+                if dst_reg != 'A':
+                    if dst_reg not in REG_MAP or dst_reg == 'FLAGS':
+                        raise ValueError(f"Invalid target register for LI: '{dst_reg}'")
+                    cleaned_tokens.append(('MOV', [dst_reg, 'A'], pc))
+                    pc += 2
+
+            elif mnemonic == 'FRET':
+                # Far Return Pseudo-Instruction: POP PC into D, POP PR into C, JMP [D]
+                cleaned_tokens.append(('POP', ['D'], pc))
+                pc += 2
+                cleaned_tokens.append(('POP', ['C'], pc))
+                pc += 2
+                cleaned_tokens.append(('JMP', ['[D]'], pc))
+                pc += 2
+
             elif mnemonic == 'EXEC':
-                raise SyntaxError("Opcode 'EXEC' is deprecated in ISA v1.1.0. Use 'JMP [D]' or 'JMP MAX' for far branches.")
+                raise SyntaxError("Opcode 'EXEC' is deprecated in ISA v1.1.0 & ABI v1.1.0. "
+                                  "Use stack-based far calls with 'JMP [D]' / 'JMP MAX' or 'FRET' for far returns.")
+
             else:
                 cleaned_tokens.append((mnemonic, tokens[1:], pc))
                 pc += 2
@@ -165,7 +187,7 @@ class MicroCoreAssembler:
         return bytes(binary_image), literal_init_bytes
 
 def main():
-    parser = argparse.ArgumentParser(description="μ-Core Assembler (Supports μ4 and μ8; ISA v1.1.0)")
+    parser = argparse.ArgumentParser(description="μ-Core Assembler (Supports μ4 and μ8; ISA v1.1.0 & ABI v1.1.0)")
     parser.add_argument("source", help="Path to assembly source file")
     parser.add_argument("-o", "--output", help="Output binary path or output directory")
     parser.add_argument("-t", "--target", choices=['mu4', 'mu8'], default='mu8', help="Target hardware architecture (default: mu8)")
@@ -198,7 +220,7 @@ def main():
 
     print(f"Successfully assembled for [{args.target.upper()}]: {args.source} -> {out_path}")
 
-    if args.verbose or True:
+    if args.verbose:
         print("\n=== ASSIGNED SYMBOL TABLE ===")
         for label, addr in asm.symbol_table.items():
             print(f"  {label:<12} -> 0x{addr:02X}")
@@ -210,3 +232,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
