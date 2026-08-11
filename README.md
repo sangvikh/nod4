@@ -1,4 +1,4 @@
-# μ-Core Architecture Specification (v1.1.0)
+# μ-Core Architecture Specification (v1.3.0)
 
 > **A simple, modular computer architecture designed to outlive its physical implementation.**
 
@@ -25,8 +25,8 @@
 ucore-architecture/
 ├── README.md                   # High-level overview & project guide
 ├── docs/
-│   ├── 01_ISA_Manifest_v1.1.0.md  # Formal Hardware Specification (Normative)
-│   ├── 02_ABI_Standard_v1.1.0.md  # Formal Software Cooperation Specification (Normative)
+│   ├── 01_ISA_Manifest.md  # Formal Hardware Specification (Normative)
+│   ├── 02_ABI_Standard.md  # Formal Software Cooperation Specification (Normative)
 │   └── 03_Hardware_Primer.md      # Conceptual Guide, TTL Logic & Pedagogy
 ├── toolchain/
 │   ├── asm/
@@ -46,8 +46,8 @@ ucore-architecture/
 
 The architecture is organized into three distinct, non-overlapping normative layers:
 
-1. **[ISA Specification v1.1.0](docs/01_ISA_Manifest_v1.1.0.md):** The normative hardware contract. Defines opcodes, instruction timings, flag semantics, memory namespaces, and hardware stack behavior.
-2. **[ABI Specification v1.1.0](docs/02_ABI_Standard_v1.1.0.md):** The normative software contract. Defines register volatility ($A, B, D$ scratch; $C$ preserved), `CALL`/`RET` subroutine conventions, and domain transfer (`EXEC`) entry routers.
+1. **[ISA Specification](docs/01_ISA_Manifest.md):** The normative hardware contract. Defines opcodes, instruction timings, flag semantics, memory namespaces, and hardware stack behavior.
+2. **[ABI Specification](docs/02_ABI_Standard.md):** The normative software contract. Defines register volatility ($A, B, D$ scratch; $C$ preserved), `CALL`/`RET` subroutine conventions, and domain transfer (`EXEC`) entry routers.
 3. **[Hardware Primer & Manifesto](docs/03_Hardware_Primer.md):** The pedagogical narrative. Explains design decisions, $74\text{HC}$ TTL breadboard implementation tricks, and Page 0 microkernel routing.
 
 ---
@@ -96,5 +96,5 @@ python3 toolchain/emu/ucore_emu.py build/01_loop_sum.bin
 
 ## 📜 License
 
-This specification and reference software are open-source and released under the [MIT License](https://www.google.com/search?q=LICENSE).
+This specification and reference software are open-source and released under the [MIT License](https://en.wikipedia.org/wiki/MIT_License).
 
