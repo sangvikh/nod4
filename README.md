@@ -1,100 +1,105 @@
-# μ-Core Architecture Specification (v1.3.0)
-
-> **A simple, modular computer architecture designed to outlive its physical implementation.**
-
-[![Specification: Frozen v1.1.0](https://img.shields.io/badge/ISA%20%26%20ABI-v1.1.0%20Frozen-blue.svg)](docs/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-
-μ-Core (uCore) is a minimalist, parameterized Instruction Set Architecture (ISA) engineered for maximum clarity, hardware economy, and long-term stability. Whether implemented on 74HC TTL logic breadboards, FPGA soft-cores, discrete transistor cards, or software emulators, μ-Core maintains strict, deterministic binary compatibility.
+Here is a production-ready `README.md` tailored specifically to your directory structure, capturing that authentic 80s retro-hardware aesthetic while highlighting the core engineering achievements of the design.
 
 ---
 
-## 🌟 Key Architectural Features
-
-* **Fixed 2-Unit Instruction Format:** Every instruction across all execution widths ($W$) occupies exactly two Storage Units ($2W$ bits: $\text{Opcode} + \text{Operand}$), driven by a uniform 4-phase architectural cycle ($T_0..T_3$).
-* **Data Page $C:D$ Addressing:** Accesses up to $2^{2W}$ locations (64 KiB on μ8) without requiring multi-byte ALUs or multi-cycle address calculations.
-* **The `MAX` Escape Sentinel:** Uses a single logical sentinel (`$FF` on μ8) to provide indirect data addressing (`LOAD [D]`) and cross-page far jumps (`JMP [D]`) with zero extra opcode bloat or modal bits.
-* **Flag Preservation Law:** Non-ALU instructions (`LOAD`, `STORE`, `MOV`, `PUSH`, `POP`, `IO`) leave $ZF$ and $CF$ strictly untouched, enabling portable multi-precision arithmetic chains.
-* **Page-Local Subroutine & Untyped Stack:** `CALL` and `RET` operate strictly page-locally within active Page Register $PR$. Cross-page domain switches execute far jumps via `JMP MAX` ($PR \leftarrow C, \text{PC} \leftarrow D$).
-
----
-
-## 📁 Repository Structure
+# NOD-4 (NMOS Open-Drain 4-Bit Core)
 
 ```text
-ucore-architecture/
-├── README.md                   # High-level overview & project guide
-├── docs/
-│   ├── 01_ISA_Manifest.md  # Formal Hardware Specification (Normative)
-│   ├── 02_ABI_Standard.md  # Formal Software Cooperation Specification (Normative)
-│   └── 03_Hardware_Primer.md      # Conceptual Guide, TTL Logic & Pedagogy
-├── toolchain/
-│   ├── asm/
-│   │   └── ucore_asm.py           # Conforming Two-Pass Python Assembler
-│   └── emulator/
-│       └── ucore_emu.py           # Reference Interactive Python Emulator
-└── examples/
-    ├── 01_loop_sum.asm            # Basic arithmetic & branching loop
-    ├── 02_subroutine.asm          # Page-local call conventions & callee-saved rules
-    └── 03_microkernel.asm         # Cross-page domain switch & system call via JMP MAX
+                  ┌──────────────────────────────────────────────┐
+                  │   NOD-4 DISCRETE NMOS ARCHITECTURE ENGINE    │
+                  │  Active-LOW • Open-Drain • Central Override  │
+                  └──────────────────────┬───────────────────────┘
+                                         │
+                   ┌─────────────────────┴─────────────────────┐
+                   │        37-Pin System Backplane Bus        │
+                   └───┬─────────────┬─────────────┬───────────┘
+                       │             │             │
+                 ┌─────┴─────┐ ┌─────┴─────┐ ┌─────┴─────┐
+                 │ Reg Cards │ │ PC Cards  │ │ Central   │
+                 │  (A-D)    │ │ (PC_H/L)  │ │ Control   │
+                 │ "Dumb"    │ │ "Dumb"    │ │ ~27 FETs  │
+                 └───────────┘ └───────────┘ └───────────┘
+
+```
+
+The **NOD-4** is a modular, discrete NMOS 4-bit processor built on a minimalist architectural principle: **Active-LOW open-drain physics at the edges, minimal overrides at the center.**
+
+Rather than duplicating instruction-decoding logic across multiple circuit boards, NOD-4 isolates all storage and datapath operations on completely ignorant "dumb" latch cards. Exceptional instruction behavior (`LDI`, `LD`/`ST`, conditional branches, `UNARY`) is handled exclusively by a central pass-FET exception handler containing roughly **27 transistors**.
+
+---
+
+## Key Architectural Invariants
+
+* **Active-LOW Open-Drain Bus:** Every backplane trace defaults to $+5\text{V}$ ($V_{CC}$) via pull-up resistors. Cards interact with the system strictly by pulling traces to $GND$. Tri-stating requires zero active drivers—disabling a card simply means turning off its pull-down N-FETs.
+* **0-Transistor Address Bus Ownership:** Address bus routing requires no multiplexers. Timestep signals ($T_0\text{--}T_1$ for Fetch; $T_2\text{--}T_3$ for Execution) and hardwired slot pinouts dictate whether $PC$ or Regs $C:D$ drive `ADDR_H:ADDR_L`.
+* **Hardware $ALU\_ENABLE$ ($OP[3]$):** Instructions with $OP[3] = 0$ (`0x0`–`0x7`) freeze ALU flags and tri-state ALU drivers automatically, preserving flag state across data transfers without extra control logic.
+* **Destructive Write Prevention (`111` NULL):** Instructions that generate no register writeback (`CMP`, `ST`) override `DEST_ADDR` to `111`. No card responds, allowing data on `BUS[3:0]` to dissipate safely.
+* **Memory-Safe $0x00 = \text{NOP}$:** Opcode `0x00` decodes naturally to `MOV A, A`. Uninitialized or erased memory ranges ($0x00$) execute safely as non-destructive identity moves.
+
+---
+
+## Engine Specifications
+
+| Parameter | Specification |
+| --- | --- |
+| **Datapath Width** | 4-bit parallel data bus (`BUS[3:0]`) |
+| **Address Space** | 8-bit pointer address space (`ADDR_H:ADDR_L`, 256 nibbles) |
+| **Instruction Set** | 16 opcodes split into 4 structural quadrants |
+| **Clocking / Execution** | Single $CLK$ driving a 4-step 1-hot ring counter ($T_0\text{--}T_3$) |
+| **Backplane Interconnect** | 37-pin edge connector matrix |
+| **Logic Family** | Discrete NMOS / Pass-Transistor Logic (PTL) |
+
+---
+
+## ISA Quick Reference
+
+| Opcode Quadrant | Operations | Special Behavior |
+| --- | --- | --- |
+| **`00xx` (`0x0`–`0x3`)** | `MOV`, `LD`, `ST`, `BRANCH` | Data movement & flow control. Flags remain frozen. |
+| **`01xx` (`0x4`–`0x7`)** | `LDI A`, `LDI B`, `LDI C`, `LDI D` | Direct bitmapped destination targeting via $OP[1:0]$. |
+| **`10xx` (`0x8`–`0xB`)** | `ADD`, `SUB`, `AND`, `OR` | Direct $OP[1:0] \to F_1, F_0$ ALU function line mapping. |
+| **`11xx` (`0xC`–`0xF`)** | `XOR`, `UNARY`, `NOT`, `CMP` | Extended ALU. Opcode `0xD` swizzles subops (`INC/DEC/INCC/DECC`). |
+
+*For complete electrical timing, signal equations, and backplane pinouts, see [`docs/ISA_Manifest.md`](https://www.google.com/search?q=docs/ISA_Manifest.md).*
+
+---
+
+## Repository Structure
+
+```text
+.
+├── build/                 # Generated binary artifacts, ROM dumps, and build logs
+├── docs/                  # Architectural documentation and hardware specifications
+│   └── ISA_Manifest.md    # Master architectural manifesto and signal equations
+├── examples/              # Sample NOD-4 assembly programs and test vectors
+├── toolchain/             # Assembler, simulator, and build tools
+├── LICENSE                # Open-source hardware license
+└── README.md              # System overview
 
 ```
 
 ---
 
-## 📖 Specifications Overview
+## Toolchain & Usage
 
-The architecture is organized into three distinct, non-overlapping normative layers:
+The `toolchain/` directory contains tools for assembling NOD-4 assembly programs into binary ROM images and running cycle-accurate software simulations.
 
-1. **[ISA Specification](docs/01_ISA_Manifest.md):** The normative hardware contract. Defines opcodes, instruction timings, flag semantics, memory namespaces, and hardware stack behavior.
-2. **[ABI Specification](docs/02_ABI_Standard.md):** The normative software contract. Defines register volatility ($A, B, D$ scratch; $C$ preserved), `CALL`/`RET` subroutine conventions, and domain transfer (`EXEC`) entry routers.
-3. **[Hardware Primer & Manifesto](docs/03_Hardware_Primer.md):** The pedagogical narrative. Explains design decisions, $74\text{HC}$ TTL breadboard implementation tricks, and Page 0 microkernel routing.
-
----
-
-## ⚡ Assembly Quickstart
-
-Here is how multi-byte addition works under μ-Core assembly:
-
-```assembly
-; ===================================================================
-; 16-BIT ADDITION: Add [C:$00..$01] to [C:$02..$03] -> Result [C:$04..$05]
-; (Pursuant to Flag Preservation Law: LOAD/STORE preserve Carry Flag!)
-; ===================================================================
-    ; 1. Low Byte Addition
-    LOAD $00            ; Read Low Byte 1 (Flags UNCHANGED)
-    MOV B, A            ; B <- Low Byte 1 (Flags UNCHANGED)
-    LOAD $02            ; Read Low Byte 2 (Flags UNCHANGED)
-    ALU ADD             ; A <- Low1 + Low2 (Updates ZF and CF)
-    STORE $04           ; Store Low Result (CF PRESERVED)
-
-    ; 2. High Byte Addition with Carry
-    LOAD $01            ; Read High Byte 1 (CF PRESERVED!)
-    MOV B, A            ; B <- High Byte 1 (CF PRESERVED!)
-    LOAD $03            ; Read High Byte 2 (CF PRESERVED!)
-    ALU ADC             ; A <- High1 + High2 + CF
-    STORE $05           ; Store High Result
-
-```
-
----
-
-## 🛠️ Toolchain Usage
-
-The toolchain relies on standard Python 3.8+ with zero external dependencies.
+### Assembling a Program
 
 ```bash
-# 1. Assemble source into build directory
-python3 toolchain/asm/ucore_asm.py examples/01_loop_sum.asm -o build/ -v
+python3 toolchain/hasm.py examples/pointer_demo.asm -o build/pointer_demo.bin
 
-# 2. Run simulation in interactive CLI emulator
-python3 toolchain/emu/ucore_emu.py build/01_loop_sum.bin
+```
+
+### Running the Simulator
+
+```bash
+python3 toolchain/nod4_sim.py build/pointer_demo.bin --trace
 
 ```
 
 ---
 
-## 📜 License
+## License
 
-This specification and reference software are open-source and released under the [MIT License](https://en.wikipedia.org/wiki/MIT_License).
-
+This project is released under the **MIT License**. See `LICENSE` for details.
