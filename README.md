@@ -1,5 +1,3 @@
----
-
 # NOD-4 (NMOS Open-Drain 4-Bit Core)
 
 ```text
