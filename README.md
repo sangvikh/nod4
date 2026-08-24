@@ -1,5 +1,3 @@
-Here is a production-ready `README.md` tailored specifically to your directory structure, capturing that authentic 80s retro-hardware aesthetic while highlighting the core engineering achievements of the design.
-
 ---
 
 # NOD-4 (NMOS Open-Drain 4-Bit Core)
