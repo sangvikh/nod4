@@ -1,211 +1,304 @@
-# NOD-4 Architectural Manifest & System Specification
+# NOD-4 Reference Manual & Hardware Architecture (v8.6 Final)
 
-The **NOD-4** is a discrete NMOS 4-bit processor built on an active-LOW open-drain backplane architecture. System control is divided between a central pass-FET exception matrix and opcode-ignorant modular peripheral cards.
+**Architecture Type:** 4-Bit Cumulative Discrete NMOS Microprocessor
 
-This document serves as the master hardware and architectural specification for the NOD-4 engine, incorporating the **Centralized $\overline{\text{OE}} / \overline{\text{WE}}$ Backplane Routing**, **8-Slot Unified Addressing Matrix**, and **Extended Bus Selection Logic**.
+**Addressing & Pointers:** 8-Bit Unified Address Space (`[RegC:RegD]` / `[PCH:PCL]`)
 
----
+**Physical Hierarchy:** 48-Pin Passive Backplane Bus $\rightarrow$ Universal Base Cards $\rightarrow$ Counter/Stack Daughtercards
 
-## 1. Centralized Bus Control Model
-
-Rather than placing 3-bit address comparators and decode gates on every circuit board, NOD-4 centralizes all slot address decoding onto the **Central Control Card**.
-
-```text
-               ┌──────────────────────────────────────────────┐
-               │         CENTRAL CONTROL CARD                 │
-               │  • 3-to-8 SRC Decoder  • $T_2/T_3$ Gating    │
-               │  • 3-to-8 DST Decoder  • Pass-FET Exception  │
-               └──────────────┬───────────────────────────────┘
-                              │
-         ┌────────────────────┴────────────────────┐
-         │ 16-Line Active-LOW Control Bus          │
-         │ (8× ~OE[7:0] Read  •  8× ~WE[7:0] Write)│
-         └────┬───────────────┬───────────────┬────┘
-              │               │               │
-        ┌─────┴─────┐   ┌─────┴─────┐   ┌─────┴─────┐
-        │ Reg Cards │   │ PC Cards  │   │ Stack Card│
-        │ (Slots0-3)│   │ (Slots4-5)│   │ (Slot 6)  │
-        │ 0 Decoders│   │ 0 Decoders│   │ 0 Decoders│
-        └───────────┘   └───────────┘   └───────────┘
-
-```
-
-### System Benefits
-
-* **Transistor Economy:** Replaces ~14 address-matching transistors per peripheral card with a single central 3-to-8 decoder pair (~16–20 NMOS transistors total for the system), saving ~60 hand-soldered FETs.
-* **Passive Dumb Cards:** Peripheral cards require zero clock taps ($T_0\text{--}T_3$), ring-counter logic, or identity comparators. Cards simply expose open-drain N-FET drivers hooked to $\overline{\text{OE}}$ and input latches hooked to $\overline{\text{WE}}$.
-* **100% Slot Interchangeability:** Cards can be plugged into any physical backplane edge slot; identity is assigned via an on-card 8-position jumper header connected to the shared $\overline{\text{OE}_n} / \overline{\text{WE}_n}$ traces.
+**Control Philosophy:** Pure Bitmapped Control, Direct-Hardwired Register Indexing, Zero-Decoder Glue Logic, Level-Active Execution, Internal Decoder Self-Reset, 5-Transistor Steering Tree Branch Engine
 
 ---
 
-## 2. Unified 8-Slot Address Matrix
+## 1. Physical System Invariants & Electrical Specifications
 
-The 3-bit slot address space (`000` through `111`) maps all standard data registers, system pointers, self-indexing hardware counters, and memory latches.
+* **Strict Hardware Invariant:** `OPCODE[1:0]` is hardwired directly to the Destination Write Enable (`DST_WE`) decoder across all quadrants. `OPERAND[1:0]` is hardwired directly to the Source Output Enable (`SRC_OE`) decoder CPU-wide. Zero pass-gate MUXes are required on register index lines.
+* **Stack Module (`STK`):** Self-contained daughtercard featuring an internal up/down counter and LIFO register array. Interacts directly with `BUS[3:0]` without touching RAM or external memory address buses.
+* **Level-Active Execution:** All control assertions are static logic levels active throughout $T_2$. Setup and latching occur on the trailing edge ($T_2 \rightarrow T_3$), where $T_3$ triggers an asynchronous $\overline{\text{CYCLE\_RESET}}$ for standard 3-cycle execution.
+* **Logic Family:** Discrete NMOS pass-transistor and depletion-load logic.
+* **Signal Standard:** Active-LOW open-drain backplane rails with passive $2.2\text{ k}\Omega$ pull-up resistors to $+5\text{V}$. Active-LOW switching driven by 2N7000 NMOS transistors.
+* **Concurrency Bus Engine (5 Dedicated Parallel Buses):**
+1. `BUS[3:0]`: Primary 4-bit bidirectional data and register transfer bus.
+2. `ADDR_H[3:0]`: High 4-bit memory address rail (driven by `RegC` or `PCH` Base Cards via Header 3).
+3. `ADDR_L[3:0]`: Low 4-bit memory address rail (driven by `RegD` or `PCL` Base Cards via Header 3).
+4. `OPCODE[3:0]`: Latched instruction opcode nibble (`OP[3:0]`).
+5. `OPERAND[3:0]`: Latched instruction operand nibble (`OPERAND[3:0]`).
 
-| Slot ID (`ADDR[2:0]`) | Mnemonic | Read Action ($\overline{\text{OE}_n} = 0$) | Write Action ($\overline{\text{WE}_n} = 0$) | Card Description |
+
+* **Execution Flags:**
+* **$ZF$ (Zero Flag):** Set if ALU output equals `0` (sampled on trailing edge of $T_3$).
+* **$CF$ (Carry/Borrow Flag):** Set on arithmetic overflow or underflow (sampled on trailing edge of $T_3$).
+
+
+
+---
+
+## 2. System Hardware Card Manifest & Bus Slot Mapping
+
+| Slot / Module | Board Type | Qty | Primary Function | Backplane Bus Connections |
 | --- | --- | --- | --- | --- |
-| **`000` (0)** | `REG_A` | Drives `Reg A` onto `BUS[3:0]` | Latches `BUS[3:0]` into `Reg A` | Standard 4-bit storage register |
-| **`001` (1)** | `REG_B` | Drives `Reg B` onto `BUS[3:0]` | Latches `BUS[3:0]` into `Reg B` | Standard 4-bit storage register |
-| **`010` (2)** | `REG_C` | Drives `Reg C` onto `BUS[3:0]` | Latches `BUS[3:0]` into `Reg C` | Storage / RAM Pointer High |
-| **`011` (3)** | `REG_D` | Drives `Reg D` onto `BUS[3:0]` | Latches `BUS[3:0]` into `Reg D` | Storage / RAM Pointer Low |
-| **`100` (4)** | `PCH` | Drives `PC_H` onto `BUS[3:0]` | Latches `BUS[3:0]` into `PC_H` | Program Counter High Nibble |
-| **`101` (5)** | `PCL` | Drives `PC_L` onto `BUS[3:0]` | Latches `BUS[3:0]` into `PC_L` | Program Counter Low Nibble |
-| **`110` (6)** | `STK` | Drives `RAM[SP]` onto `BUS[3:0]`<br>
-
-<br>*(Auto-decrements $SP$ on $T_2\to T_3$)* | Latches `BUS[3:0]` into `RAM[SP]`<br>
-
-<br>*(Auto-increments $SP$ on $T_2\to T_3$)* | Self-Indexing 16-Nibble Hardware Stack Card |
-| **`111` (7)** | `NULL` / `RAM` | External RAM Read (`RAM_OE`) | External RAM Write (`RAM_WE`) / Suppress Write | RAM Interface / Open-Drain Drain Sink |
-
----
-
-## 3. Bus Timings & Central Strobe Gating
-
-Execution is structured across a 4-phase 1-hot ring counter ($T_0\text{--}T_3$). The Central Control Card gates the 3-to-8 decoder outputs directly with $T_2$ and $CLK$.
-
-```text
-CLK    ──┐   ┌───┐   ┌───┐   ┌───┐   ┌───
-         └───┘   └───┘   └───┘   └───┘
-Phase  │  T0   │  T1   │  T2   │  T3   │
-       ├───────┼───────┼───────┼───────┤
-~OE_x  ─────────────────┐       ───────── (Active-LOW Read: Phase T2)
-                        └───────
-~WE_y  ─────────────────────┐   ───────── (Active-LOW Write: Phase T2 & CLK=0)
-                            └───
-
-```
-
-### Signal Equations
-
-$$\overline{\text{OE}_x} = \neg \left( \text{Decode}(SRC\_ADDR = x) \land T_2 \right)$$
-
-$$\overline{\text{WE}_y} = \neg \left( \text{Decode}(DST\_ADDR = y) \land T_2 \land \overline{CLK} \right)$$
-
-1. **Phase $T_0$ (Opcode Fetch):** $PC$ owns address bus (`ADDR_H:ADDR_L`). `RAM_OE` pulled LOW. $IR_{OP}$ latches `BUS[3:0]`.
-2. **Phase $T_1$ (Operand Fetch):** $PC$ owns address bus. `RAM_OE` pulled LOW. $IR_{OPER}$ latches `BUS[3:0]`.
-3. **Phase $T_2$ (Execution & Data Transfer):**
-* Selected $\overline{\text{OE}_x}$ goes LOW for the entire duration of $T_2$, turning on the open-drain N-FET output drivers of slot $x$.
-* Selected $\overline{\text{WE}_y}$ goes LOW strictly while $T_2 \land \overline{CLK}$ is active, latching data safely into slot $y$ on the falling edge of $CLK$.
-
-
-4. **Phase $T_3$ (Bus Recovery & State Increment):**
-* All $\overline{\text{OE}}$ and $\overline{\text{WE}}$ lines return to $+5\text{V}$ (High-Z).
-* Sequential counters (e.g., $SP$ on `STK` slot `110`) execute internal increment/decrement state transitions.
-
-
+| **`RegA`** (Slot 0) | Universal Base Card (UBC) | 1 | 4-Bit Primary Accumulator | `BUS[3:0]`, `~WE[0]`, `~OE[0]` |
+| **`RegB`** (Slot 1) | Universal Base Card (UBC) | 1 | 4-Bit Auxiliary Scratchpad | `BUS[3:0]`, `~WE[1]`, `~OE[1]` |
+| **`RegC`** (Slot 2) | Universal Base Card (UBC) | 1 | High Pointer Byte (`PTR_H`) | `BUS[3:0]`, `ADDR_H[3:0]`, `~WE[2]`, `~OE[2]` |
+| **`RegD`** (Slot 3) | Universal Base Card (UBC) | 1 | Low Pointer Byte (`PTR_L`) | `BUS[3:0]`, `ADDR_L[3:0]`, `~WE[3]`, `~OE[3]` |
+| **`MEM`** (Slot 4) | Memory Transceiver Board | 1 | ROM/RAM Control & Bus Buffer | `ADDR_H/L`, `BUS[3:0]`, `~WE[4]`, `~OE[4]` |
+| **`PCH`** (Slot 5) | UBC + Counter Daughtercard | 1 | Program Counter High Byte | `BUS[3:0]`, `ADDR_H[3:0]`, `~WE[5]`, `~OE[5]` |
+| **`PCL`** (Slot 6) | UBC + Counter Daughtercard | 1 | Program Counter Low Byte | `BUS[3:0]`, `ADDR_L[3:0]`, `~WE[6]`, `~OE[6]` |
+| **`STK`** (Slot 7) | UBC + Stack LIFO Daughtercard | 1 | Hardware Stack Pointer & Array | `BUS[3:0]`, `~WE[7]`, `~OE[7]`, `STK_PUSH_EN`, `STK_OE` |
+| **`OPCODE`** | Universal Base Card (UBC) | 1 | Opcode Latch (`OP[3:0]`) | `BUS[3:0]`, `OPCODE[3:0]` |
+| **`OPERAND`** | Universal Base Card (UBC) | 1 | Operand Latch (`OPERAND[3:0]`) | `BUS[3:0]`, `OPERAND[3:0]` |
+| **`ALU`** | Custom Discrete Board | 1 | 4-Bit Adder, Carry Tap, Diode OR | `BUS[3:0]`, `OPCODE[3:0]`, `OPERAND[3:0]` |
+| **`TIMING`** | Custom Discrete Board | 1 | State Counter, Decoder, Flags ($ZF, CF$), Steering Tree | `CLK`, `~T0`..`~T5`, Control Signals |
 
 ---
 
-## 4. Extended Instruction Set Architecture (ISA)
+## 3. Universal Base Card Architecture & Physical Hierarchy
 
-The 4-bit opcode is split into 4 structural quadrants (`0x0` through `0xF`).
+Every register node uses the standardized **Universal Base Card (UBC)** PCB layout, configured via three on-board headers:
 
-```text
-                      OPCODE QUADRANTS (OP[3:0])
-  ┌──────────────────┬──────────────────┬──────────────────┬──────────────────┐
-  │  00xx (0x0-0x3)  │  01xx (0x4-0x7)  │  10xx (0x8-0xB)  │  11xx (0xC-0xF)  │
-  │  Data Movement & │  Immediate Data  │  Primary ALU     │  Extended ALU &  │
-  │   Flow Control   │    (LDI A-D)     │ (ADD/SUB/AND/OR) │  Subops (UNARY)  │
-  └──────────────────┴──────────────────┴──────────────────┴──────────────────┘
+```
++-----------------------------------------------------------------+
+|                      BACKPLANE (48 Pins)                        |
++-----------------------------------------------------------------+
+                                |
+                                v (Plugs into Backplane Slot)
++-----------------------------------------------------------------+
+|                    UNIVERSAL BASE CARD (UBC)                    |
+| - 4x NMOS D-Latch Storage Core                                  |
+| - Header 1: 2x14 Diode-OR Write Enable (INT_WE)                 |
+| - Header 2: 2x14 Diode-OR Output Enable (OE_MAIN / SEC_OE)      |
+| - Header 3: Secondary Destination Output Bridge (SEC_DEST)      |
+| - Universal 13-Pin Daughtercard Interface Socket                |
++-----------------------------------------------------------------+
+                                |
+                                v (Plugs into Base Card Socket)
++-----------------------------------------------------------------+
+|               COUNTER / STACK DAUGHTERCARD                      |
+| - Counter: Smart Auto-Inc/Dec Adder Circuitry & Carry Routing   |
+| - Stack: Internal Up/Down Pointer & Dedicated LIFO RAM Array   |
+| - Base Card ~COUNT_LATCH Latching Logic                         |
++-----------------------------------------------------------------+
 
 ```
 
-### Extended `LD` / `ST` Encodings (Bank Switching via $ADDR[2]$)
+### Base Card Headers & Internal Logic
 
-Standard `MOV` instructions operate within Bank 0 ($ADDR[2] = 0$, selecting slots `000`–`011` for Regs A–D).
+* **Latch Storage Core:** 4x Discrete NMOS D-Latch cells with clock-gated active-LOW write enable:
 
-`LD` (`0x1`) and `ST` (`0x2`) harvest unused operand bits to set $ADDR[2] = 1$, unlocking instant access to system slots `100` (`PCH`), `101` (`PCL`), and `110` (`STK`).
+$$\text{WRITE\_ENABLE} = \overline{\text{INT\_WE}} \cdot \overline{\text{CLK}}$$
 
-#### Extended `LD` Opcode (`0x1`) — `OPERAND[3:2]` = $dst$ (Regs A–D), `OPERAND[1:0]` = Mode
 
-| Operand Binary | Mnemonic | Hardware Action | Execution Encoding |
-| --- | --- | --- | --- |
-| `dst : 00` | `LD dst` | Read `RAM[C:D]` into `dst` | $SRC = \text{Slot } 7\text{ (RAM)}$, $DST = dst$ |
-| `dst : 01` | `MOV dst, PCH` | Read `PC_H` into `dst` | $SRC = \text{Slot } 4\text{ (PCH)}$, $DST = dst$ |
-| `dst : 10` | `MOV dst, PCL` | Read `PC_L` into `dst` | $SRC = \text{Slot } 5\text{ (PCL)}$, $DST = dst$ |
-| `dst : 11` | `POP dst` | Pop top of `STK` into `dst` | $SRC = \text{Slot } 6\text{ (STK)}$, $DST = dst$ |
-
-#### Extended `ST` Opcode (`0x2`) — `OPERAND[3:2]` = Mode, `OPERAND[1:0]` = $src$ (Regs A–D)
-
-| Operand Binary | Mnemonic | Hardware Action | Execution Encoding |
-| --- | --- | --- | --- |
-| `00 : src` | `ST src` | Store `src` to `RAM[C:D]` | $SRC = src$, $DST = \text{Slot } 7\text{ (RAM)}$ |
-| `01 : src` | `PUSH src` | Push `src` ($A, B, C, D$) to `STK` | $SRC = src$, $DST = \text{Slot } 6\text{ (STK)}$ |
-| `10 : 00` | `PUSH PCH` | Push `PC_H` directly to `STK` | $SRC = \text{Slot } 4\text{ (PCH)}$, $DST = \text{Slot } 6\text{ (STK)}$ |
-| `11 : 00` | `PUSH PCL` | Push `PC_L` directly to `STK` | $SRC = \text{Slot } 5\text{ (PCL)}$, $DST = \text{Slot } 6\text{ (STK)}$ |
+* **Header 1 (2x14 WE Header):** Active-LOW Diode-OR array linking backplane write enable signals ($\overline{\text{WE}}[0:7]$) or specific timestep lines ($\overline{T_0}$–$\overline{T_5}$) to internal write line ($\overline{\text{INT\_WE}}$).
+* **Header 2 (2x14 OE Header):** Active-LOW Diode-OR array routing control step lines to primary bus buffer ($\overline{\text{OE\_MAIN}} \rightarrow \text{BUS}[3:0]$) or secondary output buffer ($\overline{\text{SEC\_OE}}$).
+* **Header 3 (SEC_DEST Header):** 4-pin output bridge linking secondary outputs to target backplane rails (`ADDR_H[3:0]`, `ADDR_L[3:0]`, `OPCODE[3:0]`, or `OPERAND[3:0]`).
 
 ---
 
-## 5. Subroutine & Stack Calling Conventions
+## 4. Master Universal Base Card Configuration Matrix
 
-With the Slot `110` Auto-Indexing Stack Card and readable Program Counter slots (`100`/`101`), subroutine calls and returns execute cleanly without destroying $C:D$ RAM pointers.
-
-### Subroutine Call (`CALL target`)
-
-```assembly
-PUSH PCH        ; Opcode 0x2 0x8 (Push return address high nibble)
-PUSH PCL        ; Opcode 0x2 0xC (Push return address low nibble)
-SET_CD MY_SUB   ; Load target address into C:D
-JMP             ; Jump to subroutine
-
-```
-
-### Subroutine Return (`RET`)
-
-```assembly
-POP D           ; Opcode 0x1 0xF (Pop saved PC_L into Reg D)
-POP C           ; Opcode 0x1 0xB (Pop saved PC_H into Reg C)
-JMP             ; Jump back to caller (PCH <- C, PCL <- D)
-
-```
+| Base Card | Architectural Role | Header 1 ($\text{WE}$) Trigger | Header 2 ($\text{OE}$) Control | Header 3 (`SEC_DEST`) Output | 13-Pin Socket |
+| --- | --- | --- | --- | --- | --- |
+| **`RegA`** | Accumulator | Backplane $\overline{\text{WE}}_0$ | Backplane $\overline{\text{OE}}_0$ | Unused | Unpopulated |
+| **`RegB`** | Scratchpad | Backplane $\overline{\text{WE}}_1$ | Backplane $\overline{\text{OE}}_1$ | Unused | Unpopulated |
+| **`RegC`** | High Pointer | Backplane $\overline{\text{WE}}_2$ | Backplane $\overline{\text{OE}}_2$ | `ADDR_H[3:0]` | Unpopulated |
+| **`RegD`** | Low Pointer | Backplane $\overline{\text{WE}}_3$ | Backplane $\overline{\text{OE}}_3$ | `ADDR_L[3:0]` | Unpopulated |
+| **`OPCODE`** | Instruction Opcode Latch | Timestep $\overline{T_0}$ | Tied LOW (Always Active) | `OPCODE[3:0]` | Unpopulated |
+| **`OPERAND`** | Instruction Operand Latch | Timestep $\overline{T_1}$ | Tied LOW (Always Active) | `OPERAND[3:0]` | Unpopulated |
+| **`PCH`** | Program Counter High | Backplane $\overline{\text{WE}}_5$ / Subops | $\overline{\text{OE}}_5$ / $\overline{T_0}$ / $\overline{T_1}$ | `ADDR_H[3:0]` | Counter Daughtercard |
+| **`PCL`** | Program Counter Low | Backplane $\overline{\text{WE}}_6$ / Subops | $\overline{\text{OE}}_6$ / $\overline{T_0}$ / $\overline{T_1}$ | `ADDR_L[3:0]` | Counter Daughtercard |
+| **`STK`** | Hardware Stack Module | Backplane $\overline{\text{WE}}_7$ / Subops | Backplane $\overline{\text{OE}}_7$ / Subops | Unused | Stack LIFO Daughtercard |
 
 ---
 
-## 6. Standard Card Pinout Specification
+## 5. Universal 13-Pin Base-to-Daughtercard Interface
 
-All peripheral cards (Registers A–D, PC, Stack) interface with the backplane via a standardized 8-pin edge connector matrix.
+Base Cards requiring auto-increment/decrement or hardware stack control (`PCL`, `PCH`, `STK`) interface with daughtercards via a standard 13-pin socket:
 
-```text
-               ┌───────────────────────────────┐
-               │    NOD-4 PERIPHERAL CARD      │
-               │                               │
-               │  [8-Position Jumper Block]    │
-               │  Selects OE_n and WE_n Trace  │
-               │                               │
-               └─┬───┬───┬───┬───┬───┬───┬───┬─┘
-                 │ 1 │ 2 │ 3 │ 4 │ 5 │ 6 │ 7 │ 8 │
-                 └───┴───┴───┴───┴───┴───┴───┴───┘
-                  BUS0 BUS1 BUS2 BUS3 ~OE ~WE VCC GND
+```
+ Pin 1: VCC (+5V)          Pin 6:  D[0] (Data In 0)    Pin 10: Q[0] (Latch Out 0)
+ Pin 2: GND                Pin 7:  D[1] (Data In 1)    Pin 11: Q[1] (Latch Out 1)
+ Pin 3: ~T_STEP_A          Pin 8:  D[2] (Data In 2)    Pin 12: Q[2] (Latch Out 2)
+ Pin 4: ~T_STEP_B          Pin 9:  D[3] (Data In 3)    Pin 13: Q[3] (Latch Out 3)
+ Pin 5: ~COUNT_LATCH (Base Card Internal Latch Enable Pulse)
 
 ```
 
-| Pin | Signal | Direction | Description |
-| --- | --- | --- | --- |
-| **1** | `BUS[0]` | I/O | Active-LOW Open-Drain Data Bit 0 |
-| **2** | `BUS[1]` | I/O | Active-LOW Open-Drain Data Bit 1 |
-| **3** | `BUS[2]` | I/O | Active-LOW Open-Drain Data Bit 2 |
-| **4** | `BUS[3]` | I/O | Active-LOW Open-Drain Data Bit 3 |
-| **5** | $\overline{\text{OE}}$ | Input | Active-LOW Read Strobe (Enables output N-FET drivers) |
-| **6** | $\overline{\text{WE}}$ | Input | Active-LOW Write Strobe (Opens input transparent latches) |
-| **7** | $V_{CC}$ | Power | $+5\text{V}$ Power Rail |
-| **8** | $GND$ | Power | $0\text{V}$ Ground Return |
+* **Surface Carry Pins (`C_IN` / `C_OUT`):** 2-pin header on Counter Daughtercards. Bridging `PCL` Daughtercard $C_{\text{out}} \rightarrow$ `PCH` Daughtercard $C_{\text{in}}$ enables 8-bit ripple-carry incrementing during instruction fetches.
 
 ---
 
-## 7. Backplane Trace Assignment (37-Pin Matrix)
+## 6. Timing Engine & Dual-Nibble Fetch Mechanics
 
-```text
-Pin  Signal       Pin  Signal       Pin  Signal       Pin  Signal
-──────────────────────────────────────────────────────────────────
- 1   GND           11  BUS[2]        21  ~OE[3]        31  ~WE[3]
- 2   VCC (+5V)     12  BUS[3]        22  ~OE[4] (PCH)  32  ~WE[4] (PCH)
- 3   CLK           13  ~OE[0] (RegA) 23  ~OE[5] (PCL)  33  ~WE[5] (PCL)
- 4   CLK_n         14  ~OE[1] (RegB) 24  ~OE[6] (STK)  34  ~WE[6] (STK)
- 5   T0            15  ~OE[2] (RegC) 25  ~OE[7] (RAM)  35  ~WE[7] (RAM)
- 6   T1            16  ADDR_H[0]     26  ADDR_L[0]     36  ~RESET
- 7   T2            17  ADDR_H[1]     27  ADDR_L[1]     37  ~HALT
- 8   T3            18  ADDR_H[2]     28  ADDR_L[2]         
- 9   BUS[0]        19  ADDR_H[3]     29  ADDR_L[3]         
-10   BUS[1]        20  ~WE[0] (RegA) 30  ~WE[1] (RegB)     
+* **State Engine:** 3-bit ripple counter ($Q_2 Q_1 Q_0$) driving a 3-to-8 decoder on the **TIMING** card.
+* **Local Decoder Self-Reset Loop:** Decoder output step 6 ($\overline{T_6}$) connects directly on the TIMING board to the counter's active-LOW clear input ($\overline{\text{CLR}}$).
+* Counter ticks `101` ($T_5$) $\rightarrow$ `110` ($T_6$).
+* Internal $\overline{T_6}$ immediately pulls $\overline{\text{CLR}}$ LOW, resetting state to `000` ($T_0$) in $\approx 15\text{ ns}$.
+* Only active steps $\overline{T_0}$ through $\overline{T_5}$ route to backplane pins 05–10.
+
+
 
 ```
+  +---------------+        3-Bit         +-------------------+
+  |               |===== Q[2:0] Bus =====|  3-to-8 DECODER   |
+  | 3-Bit Counter |                      |  (NOR Matrix)     |
+  |               |                      +----+---------+----+
+  |  ~CLR Input   |<--- Internal ~T6 ---------|         |
+  +---------------+     Decoder Output        v         v
+                                          ~T0..~T5    Internal ~T6
+                                        (Backplane)   (Self-Reset)
+
+```
+
+* **Fetch Mechanics:**
+* **Phase $T_0$:** `PCH:PCL` drive `ADDR_H:ADDR_L`. $\text{RAM}[PC] \rightarrow \text{BUS}[3:0] \rightarrow \text{OPCODE}$ Base Card (latched via $\overline{T_0}$). $PCL \leftarrow PCL + 1$.
+* **Phase $T_1$:** `PCH:PCL` drive `ADDR_H:ADDR_L`. $\text{RAM}[PC+1] \rightarrow \text{BUS}[3:0] \rightarrow \text{OPERAND}$ Base Card (latched via $\overline{T_1}$). $PCL \leftarrow PCL + 1$.
+* **Phase $T_2$ Execution:** All level assertions execute during $T_2$. Standard single-cycle register/ALU/Stack operations trigger $\overline{\text{CYCLE\_RESET}}$ at entry to $T_3$, achieving optimal 3-cycle execution ($T_0, T_1, T_2$).
+
+
+
+---
+
+## 7. Hardware Control Boolean Equations & 5-Transistor Branch Engine
+
+### Intermediate Quadrant Decodes
+
+$$\text{IS\_CTRL} = \text{OP}[3] \cdot \text{OP}[2]$$
+
+$$\text{DATA\_OP} = \overline{\text{OP}[3]} \cdot \overline{\text{OP}[2]}$$
+
+$$\text{IMM\_OP} = \overline{\text{OP}[3]} \cdot \text{OP}[2]$$
+
+$$\text{MEM\_OP} = \text{OP}[3] \cdot \overline{\text{OP}[2]}$$
+
+### Control Inhibit & Direct Gating Equations
+
+Because register selection relies strictly on default bus wiring (`OPCODE[1:0]` $\rightarrow$ `DST_WE`, `OPERAND[1:0]` $\rightarrow$ `SRC_OE`), Control Quadrant signals gate global decoder enable lines during $T_2$:
+
+* **`PUSH reg` (`1100` / `10rr`):**
+
+$$\text{SRC\_OE\_ENABLE} = \text{IS\_CTRL} \cdot \text{OPERAND}[3] \cdot \overline{\text{OPERAND}[2]}$$
+
+
+$$\text{DST\_WE\_ENABLE} = 0 \quad (\text{Inhibited})$$
+
+
+$$\text{STK\_PUSH\_EN} = \text{IS\_CTRL} \cdot \text{OPERAND}[3] \cdot \overline{\text{OPERAND}[2]} \cdot T_2$$
+
+
+* **`POP reg` (`11rr` / `0100`):**
+
+$$\text{SRC\_OE\_ENABLE} = 0 \quad (\text{Inhibited})$$
+
+
+$$\text{DST\_WE\_ENABLE} = \text{IS\_CTRL} \cdot \overline{\text{OPERAND}[3]} \cdot \text{OPERAND}[2]$$
+
+
+$$\text{STK\_OE} = \text{IS\_CTRL} \cdot \overline{\text{OPERAND}[3]} \cdot \text{OPERAND}[2]} \cdot T_2$$
+
+
+* **`PUSHPC` (`1100` / `1110`):**
+Executes standard `CALL` sequence ($PCL \rightarrow \text{STK}$, $PCH \rightarrow \text{STK}$), but asserts $\overline{\text{CYCLE\_RESET}}$ at entry to $T_3$ to perform an atomic PC read onto the stack without altering PC target registers.
+
+### 5-Transistor Branch Steering Tree (`FAIL` Logic)
+
+Let $P_1 = \text{OPERAND}[1]$ and $P_0 = \text{OPERAND}[0]$. The branch failure signal is derived via pass-transistor routing:
+
+$$\text{FAIL} = \overline{P_0} \cdot (\overline{P_1} \cdot \overline{ZF} \lor P_1 \cdot \overline{CF}) \;\;\lor\;\; P_0 \cdot (\overline{P_1} \cdot ZF)$$
+
+```
+  Path A (P0 = 0: Test SET Flags)
+  ~ZF -----[ Q1: Gate=~P1 ]----+
+                               |----> (Node MUX) ----[ Q3: Gate=~P0 ]----+
+  ~CF -----[ Q2: Gate= P1 ]----+                                         |
+                                                                         +---> [ FAIL Rail ]
+  Path B (P0 = 1: Test CLEAR Flags)                                      |
+   ZF -----[ Q4: Gate= P0 ]----------> (Node B)   ----[ Q5: Gate=~P1 ]----+
+
+```
+
+### Active-LOW Cycle Reset Assertion
+
+$$\overline{\text{CYCLE\_RESET}} = \overline{(T_2 \cdot \text{FAIL}) \lor (T_3 \cdot (\text{DATA\_OP} \lor \text{IMM\_OP} \lor \text{PUSH} \lor \text{POP})) \lor (T_4 \cdot \text{JMP\_RET}) \lor (T_5 \cdot \text{CALL})}$$
+
+---
+
+## 8. Master Instruction Encoding & Quadrant Architecture
+
+**8-Bit Explicit Instruction Breakdown:**
+
+$$\text{OPCODE}[3:0] = [\text{QUAD}_1 \mid \text{QUAD}_0 \mid \text{DST}_1 \mid \text{DST}_0]$$
+
+$$\text{OPERAND}[3:0] = [\text{MODE}_1 / \text{OP}_1 \mid \text{MODE}_0 / \text{OP}_0 \mid \text{SRC}_1 / \text{PAYLOAD}_1 \mid \text{SRC}_0 / \text{PAYLOAD}_0]$$
+
+```
+  +-------+-------+------+------+----------+----------+---------+---------+
+  | QUAD1 | QUAD0 | DST1 | DST0 | MODE/OP1 | MODE/OP0 | SRC/PL1 | SRC/PL0 |
+  +-------+-------+------+------+----------+----------+---------+---------+
+  |    OPCODE (Bits 3:0)        |        OPERAND (Bits 3:0)             |
+  +-----------------------------+---------------------------------------+
+
+```
+
+### Universal 4-Quadrant Major Class Matrix (`OPCODE[3:2]`)
+
+| Quadrant (`OPCODE[3:2]`) | `OPCODE[1:0]` Target | `OPERAND[3:2]` Role | Operations | Hardware Behavior at $T_2$ |
+| --- | --- | --- | --- | --- |
+| **`00rr`** | `dst = Reg[rr]` | `00` (Src) | **Reg-Reg ALU / `MOV**` | `Reg[OPERAND[1:0]]` drives `BUS`; `Reg[OPCODE[1:0]]` latches. |
+| **`01rr`** | `dst = Reg[rr]` | Payload | **Immediate ALU** | Immediate payload drives `BUS`; `Reg[OPCODE[1:0]]` latches. |
+| **`10rr`** | `dst = Reg[rr]` | Mode | **Memory `LD`/`ST**` | Memory address bus active; transfers between RAM and `Reg[rr]`. |
+| **`11rr`** | `dst = Reg[rr]` | **Control Class** | **Control / System / Stack** | See sub-quadrant matrix below. |
+
+### Control Quadrant (`11rr`) Sub-Class Encoding
+
+| Instruction | Opcode (`OPCODE[3:0]`) | Operand (`OPERAND[3:0]`) | `SRC_OE` Decoder | `DST_WE` Decoder | $T_2$ Level Assertions |
+| --- | --- | --- | --- | --- | --- |
+| **`POP reg`** | **`11rr`** | `0100` | **Disabled** | **Active (`Reg[rr]`)** | `STK_OE` High $\rightarrow$ Stack card drives `BUS[3:0]` into `Reg[OPCODE[1:0]]`. |
+| **`PUSH reg`** | `1100` | **`10rr`** | **Active (`Reg[rr]`)** | **Disabled** | `STK_PUSH_EN` High $\rightarrow$ Stack card latches `BUS[3:0]` from `Reg[OPERAND[1:0]]`. |
+| **Branches** | `1100` | `00cc` | **Disabled** | **Disabled** | Steering tree evaluates condition `cc` (`00`: JZ, `01`: JNZ, `10`: JC, `11`: JMP). |
+| **System Ops** | `1100` | `11xx` | **Disabled** | **Disabled** | Multi-cycle PC/STK control (`1100`: CALL, `1101`: RET, `1110`: PUSHPC, `1111`: NOP). |
+
+### Register Encoding (`dst` or `src` in `OP[1:0]` / `OPERAND[1:0]`)
+
+`00` = `RegA` | `01` = `RegB` | `10` = `RegC` (High Ptr) | `11` = `RegD` (Low Ptr)
+
+---
+
+## 9. Complete 0x0–0xF Execution Matrix
+
+| Opcode | Binary | Mnemonic | Format | Timestep Execution & Micro-Operations | Total Steps |
+| --- | --- | --- | --- | --- | --- |
+| **`0x0`** | `0000` | `MOV/ALU RegA, src` | `00, src[1:0]` | **$T_2$:** `Reg[src]` drives `BUS[3:0]` $\rightarrow$ `RegA` latches. | 3 Steps ($T_3$ Reset) |
+| **`0x1`** | `0001` | `MOV/ALU RegB, src` | `00, src[1:0]` | **$T_2$:** `Reg[src]` drives `BUS[3:0]` $\rightarrow$ `RegB` latches. | 3 Steps ($T_3$ Reset) |
+| **`0x2`** | `0010` | `MOV/ALU RegC, src` | `00, src[1:0]` | **$T_2$:** `Reg[src]` drives `BUS[3:0]` $\rightarrow$ `RegC` latches. | 3 Steps ($T_3$ Reset) |
+| **`0x3`** | `0011` | `MOV/ALU RegD, src` | `00, src[1:0]` | **$T_2$:** `Reg[src]` drives `BUS[3:0]` $\rightarrow$ `RegD` latches. | 3 Steps ($T_3$ Reset) |
+| **`0x4`** | `0100` | `ALUI RegA, imm` | `op[3:2], imm[1:0]` | **$T_2$:** Immediate payload drives `BUS[3:0]` $\rightarrow$ ALU computes $\rightarrow$ `RegA` latches. | 3 Steps ($T_3$ Reset) |
+| **`0x5`** | `0101` | `ALUI RegB, imm` | `op[3:2], imm[1:0]` | **$T_2$:** Immediate payload drives `BUS[3:0]` $\rightarrow$ ALU computes $\rightarrow$ `RegB` latches. | 3 Steps ($T_3$ Reset) |
+| **`0x6`** | `0110` | `ALUI RegC, imm` | `op[3:2], imm[1:0]` | **$T_2$:** Immediate payload drives `BUS[3:0]` $\rightarrow$ ALU computes $\rightarrow$ `RegC` latches. | 3 Steps ($T_3$ Reset) |
+| **`0x7`** | `0111` | `ALUI RegD, imm` | `op[3:2], imm[1:0]` | **$T_2$:** Immediate payload drives `BUS[3:0]` $\rightarrow$ ALU computes $\rightarrow$ `RegD` latches. | 3 Steps ($T_3$ Reset) |
+| **`0x8`** | `1000` | `LD/ST RegA, mode` | `mode[3:2], src[1:0]` | **$T_2$:** `RegC:RegD` drives `ADDR_H:ADDR_L`, RAM $\leftrightarrow$ `RegA`. | 3 Steps ($T_3$ Reset) |
+| **`0x9`** | `1001` | `LD/ST RegB, mode` | `mode[3:2], src[1:0]` | **$T_2$:** `RegC:RegD` drives `ADDR_H:ADDR_L`, RAM $\leftrightarrow$ `RegB`. | 3 Steps ($T_3$ Reset) |
+| **`0xA`** | `1010` | `LD/ST RegC, mode` | `mode[3:2], src[1:0]` | **$T_2$:** `RegC:RegD` drives `ADDR_H:ADDR_L`, RAM $\leftrightarrow$ `RegC`. | 3 Steps ($T_3$ Reset) |
+| **`0xB`** | `1011` | `LD/ST RegD, mode` | `mode[3:2], src[1:0]` | **$T_2$:** `RegC:RegD` drives `ADDR_H:ADDR_L`, RAM $\leftrightarrow$ `RegD`. | 3 Steps ($T_3$ Reset) |
+| **`0xC`** | `1100` | `CTRL / POP RegA` | Subop / `0100` | **$T_2$:** If Operand=`0100`: `STK` drives `BUS[3:0]` $\rightarrow$ `RegA` latches. Else Branch/System. | 3 to 6 Steps |
+| **`0xD`** | `1101` | `POP RegB` | `0100` | **$T_2$:** `STK` drives `BUS[3:0]` $\rightarrow$ `RegB` latches. | 3 Steps ($T_3$ Reset) |
+| **`0xE`** | `1110` | `POP RegC` | `0100` | **$T_2$:** `STK` drives `BUS[3:0]` $\rightarrow$ `RegC` latches. | 3 Steps ($T_3$ Reset) |
+| **`0xF`** | `1111` | `POP RegD` | `0100` | **$T_2$:** `STK` drives `BUS[3:0]` $\rightarrow$ `RegD` latches. | 3 Steps ($T_3$ Reset) |
+
+---
+
+## 10. Control & Stack Sub-Operations Breakdown
+
+| Subop | Mnemonic | Format | Serialized Hardware Micro-Operations | Total Steps |
+| --- | --- | --- | --- | --- |
+| **Stack** | `PUSH reg` | `1100, 10rr` | **$T_2$:** `SRC_OE` active (`Reg[rr]`). `STK_PUSH_EN` active $\rightarrow$ Stack module latches `BUS[3:0]`. SP decrements. | 3 Steps ($T_3$ Reset) |
+| **Stack** | `POP reg` | `11rr, 0100` | **$T_2$:** `STK_OE` active. `DST_WE` active (`Reg[rr]`). Stack module drives `BUS[3:0]` $\rightarrow$ `Reg[rr]` latches. SP increments. | 3 Steps ($T_3$ Reset) |
+| **Branch** | `Jcc` / `JMP` | `1100, 00cc` | **$T_2$:** Evaluate Steering Tree. If `FAIL=0`: $\text{RegD} \rightarrow \text{BUS} \rightarrow \text{PCL}$. If `FAIL=1`: Trigger $\overline{\text{CYCLE\_RESET}}$.<br>
+
+<br>**$T_3$:** $\text{RegC} \rightarrow \text{BUS} \rightarrow \text{PCH}$. | 4 Steps ($T_4$ Reset taken, $T_2$ Reset untaken) |
+| **System** | `CALL` | `1100, 1100` | **$T_2$:** $\text{PCL} \rightarrow \text{BUS} \rightarrow \text{STK}$ ($SP \leftarrow SP - 1$)<br>
+
+<br>**$T_3$:** $\text{PCH} \rightarrow \text{BUS} \rightarrow \text{STK}$ ($SP \leftarrow SP - 1$)<br>
+
+<br>**$T_4$:** $\text{RegD} \rightarrow \text{BUS} \rightarrow \text{PCL}$<br>
+
+<br>**$T_5$:** $\text{RegC} \rightarrow \text{BUS} \rightarrow \text{PCH}$ | 6 Steps ($T_0$–$T_5$, internal $T_6$ reset)
