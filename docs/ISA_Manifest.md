@@ -1,4 +1,4 @@
-# NOD-4 Microprocessor Architecture & System Specification (v12.5)
+# NOD-4 Microprocessor Architecture & System Specification (v12.6)
 
 **Architecture Type:** 4-Bit Cumulative Discrete NMOS Microprocessor
 
@@ -6,7 +6,7 @@
 
 **Physical Hierarchy:** 50-Pin Passive Backplane Bus $\rightarrow$ Universal Base Cards (UBC) $\rightarrow$ Counter / Extended ALU / Interrupt Daughtercards
 
-**Control Philosophy:** Tree-Based Quadrant Decoder, Direct-Drive Unary/Shift Matrix, Zero-Decoder Destination Routing, Internal Decoder Self-Reset, Diagonal Control Escape ($dd == ss$), Bus-Hijack Interrupt Engine.
+**Control Philosophy:** Tree-Based Quadrant Decoder (`OP[3]=IMM`, `OP[2]=ALU_EN`), Direct-Drive Unary/Shift Matrix, Zero-Decoder Destination Routing, Internal Decoder Self-Reset, Diagonal Control Escape ($dd == ss$), Bus-Hijack Interrupt Engine.
 
 ---
 
@@ -14,7 +14,7 @@
 
 * **Logic Family:** Discrete NMOS pass-transistor and depletion-load logic using 2N7000 NMOS switches with active-LOW signal paths.
 * **Signal Standard:** Active-LOW open-drain backplane rails with $2.2\text{ k}\Omega$ pull-up resistors to $+5\text{V}$.
-* **Clocking Architecture & Phase Alignment:** Single-phase master clock (`CLK`). State transitions ($T_0 \dots T_5$) are triggered on the falling edge of `CLK`.
+* **Clocking Architecture & Phase Alignment:** Single-phase master clock (`CLK`). State transitions ($T_0 \dots T_5$) trigger on the falling edge of `CLK`.
 * **Two-Phase Timestep Execution Model:**
 1. **Phase 1: Setup & Drive (`CLK` LOW):** Control decoders evaluate and drive control rails (`~OE[src]` and `~WE[dst]`). Any combinational ripple or bus propagation occurs while `LATCH_ENABLE` is held off (`1`). Data on `BUS[3:0]` stabilizes cleanly during this window.
 2. **Phase 2: Latch Window (`CLK` HIGH):** Control lines remain static. Active write pulsing occurs as `CLK` transitions HIGH, driving the target latch transparent for data capture.
@@ -29,7 +29,7 @@ $$\overline{\text{LATCH\_ENABLE}_n} = \overline{\text{\textasciitilde WE}_n} \cd
 
 Data on `BUS[3:0]` must be stable prior to `CLK` rising. Latching occurs continuously while `CLK` is HIGH and freezes on the falling edge of `CLK` or upon de-assertion of `~WE[n]`.
 
-* **Program Counter (PC) Increment Mechanics:**
+* **Program Counter (PC) Auto-Increment Mechanics:**
 $PC$ auto-increments twice per instruction cycle: on the rising edge of $T_1$ (after Opcode fetch in $T_0$) and on the rising edge of $T_2$ (after Operand fetch in $T_1$). By $T_2$, $PC$ naturally equals $PC_{\text{orig}} + 2$, providing the exact return address for `CALL`, `PUSHPC`, and hardware interrupts without auxiliary addition hardware.
 $PC$ increment strobes are gated directly by the interrupt disable rail:
 
@@ -46,18 +46,19 @@ $$\text{PC\_INC\_ENABLE} = \text{INC\_STROBE} \cdot \overline{\text{IR\_DISABLE}
 
 ## 2. Tree-Based Top-Level Instruction Decoder (`OP[3:2]`)
 
-Instruction decoding uses top-level flags `ALU_EN` (`OP[2]`) and `IMM` (`OP[3]`) to route timing and execution across three distinct branches.
+Top-level decoding maps cleanly to `OP[3]` ($\text{IMM}$) and `OP[2]` ($\text{ALU\_EN}$).
 
 ```
                                 [ OPCODE[3:2] ]
+                                 (IMM, ALU_EN)
                                        |
                 +----------------------+----------------------+
                 |                                             |
-         ALU_EN = 1 (Q2, Q3)                           ALU_EN = 0
-    (Reg ALU & Immediate ALU)                                 |
+           ALU_EN = 1                                    ALU_EN = 0
+       (Q1 Reg-Reg, Q3 Immediate)                              |
                 |                             +---------------+---------------+
         • Fixed 5-Step Pipeline               |                               |
-        • Resets at T5                  IMM = 1 (Q1)                    IMM = 0 (Q0)
+        • Resets at T5                  IMM = 1 (Q2)                    IMM = 0 (Q0)
         • Hardwired ALU Sequence:      (Load Immediate)           (Moves & Control Escapes)
           - T2: Latch B (src/imm)             |                               |
           - T3: Latch A (dst) & Compute       • Fixed 3-Step                  • Moves: Reset at T3
@@ -69,12 +70,12 @@ Instruction decoding uses top-level flags `ALU_EN` (`OP[2]`) and `IMM` (`OP[3]`)
 
 ### Top-Level Quadrant Decode Table
 
-| Quadrant | `OP[3:2]` (`IMM, ALU_EN`) | Functional Class | Micro-Control Routing & Timing |
-| --- | --- | --- | --- |
-| **Q0** | `00` | Data Moves & Control Escapes | Uses sub-decoding for reset points. Supports diagonal control escapes ($dd == ss$). Resets at $T_2$ (untaken branch), $T_3$ (moves), $T_4$ (taken branch/RET), or $T_6$ (`CALL`/`NOP`/`~IRQ`). |
-| **Q1** | `01` | Load Immediate (`LDI`) | Zero decode logic. Drives `OPERAND[3:0]` directly to `BUS[3:0]`. Writes to `dst` at $T_2$. Fixed 3-step execution; resets at $T_3$. |
-| **Q2** | `10` | Reg-to-Reg Binary ALU | Hardwired 5-step pipeline. $T_2$: Latch $src \rightarrow ALU_B$; $T_3$: Latch $dst \rightarrow ALU_A$ & Compute; $T_4$: $ALU_{OUT} \rightarrow dst$. Resets at $T_5$. |
-| **Q3** | `11` | Immediate ALU & Shift Matrix | Hardwired 5-step pipeline. $T_2$: Latch $imm \rightarrow ALU_B$; $T_3$: Latch $dst \rightarrow ALU_A$ & Compute; $T_4$: $ALU_{OUT} \rightarrow dst$. Resets at $T_5$. |
+| Quadrant | Binary (`OP[3:2]`) | Bit Flags (`IMM, ALU_EN`) | Functional Class | Micro-Control Routing & Timing |
+| --- | --- | --- | --- | --- |
+| **Q0** | `00` | `IMM = 0, ALU_EN = 0` | Data Moves & Control Escapes | Sub-decodes reset points. Supports diagonal control escapes ($dd == ss$). Resets at $T_2$ (untaken branch), $T_3$ (moves), $T_4$ (taken branch/RET), or $T_6$ (`CALL`/`NOP`/`~IRQ`). |
+| **Q1** | `01` | `IMM = 0, ALU_EN = 1` | Reg-to-Reg Binary ALU | Hardwired 5-step pipeline. $T_2$: Latch $src \rightarrow ALU_B$; $T_3$: Latch $dst \rightarrow ALU_A$ & Compute; $T_4$: $ALU_{OUT} \rightarrow dst$. Resets at $T_5$. |
+| **Q2** | `10` | `IMM = 1, ALU_EN = 0` | Load Immediate (`LDI`) | Zero decode logic. Drives `OPERAND[3:0]` directly to `BUS[3:0]`. Writes to `dst` at $T_2$. Fixed 3-step execution; resets at $T_3$. |
+| **Q3** | `11` | `IMM = 1, ALU_EN = 1` | Immediate ALU & Shift Matrix | Hardwired 5-step pipeline. $T_2$: Latch $imm \rightarrow ALU_B$; $T_3$: Latch $dst \rightarrow ALU_A$ & Compute; $T_4$: $ALU_{OUT} \rightarrow dst$. Resets at $T_5$. |
 
 ---
 
@@ -84,16 +85,16 @@ To prevent floating bus conditions, overlapping enable signals, and unintended r
 
 ### Reset Point Breakdown
 
-* **$T_2 \cdot \text{FAIL}$:** Untaken branch (`Jcc` condition evaluates FALSE). Steering tree detects failure at $T_2$ and aborts before modifying $PC$.
-* **$T_3 \cdot \text{Q1\_LDI}$:** Load Immediate (`LDI`) finishes writeback at $T_2$; resets at $T_3$ entry.
+* **$T_2 \cdot \text{FAIL}$:** Untaken branch (`Jcc` condition evaluates FALSE). Steering tree evaluates combinationally during $T_2$ and terminates the cycle instantly at $T_2$, leaving $PC$ perfectly aligned at $PC_0 + 2$.
+* **$T_3 \cdot \text{Q2\_LDI}$:** Load Immediate (`LDI`) finishes writeback at $T_2$; resets at $T_3$ entry.
 * **$T_3 \cdot \text{Q0\_MOVE}$:** Standard register/memory move (`MOV`, `LD`, `ST`) finishes writeback at $T_2$; resets at $T_3$ entry.
 * **$T_4 \cdot \text{JMP\_RET}$:** Taken branch (`JMP`, `Jcc`) or Return (`RET`) loads $PCL$ at $T_2$ and $PCH$ at $T_3$; resets at $T_4$ entry.
-* **$T_5 \cdot \text{ALU\_EN}$:** ALU operations (Q2 & Q3) read operands at $T_2$/$T_3$ and write back at $T_4$; resets at $T_5$ entry.
+* **$T_5 \cdot \text{ALU\_EN}$:** ALU operations (Q1 Reg-Reg & Q3 Immediate) read operands at $T_2$/$T_3$ and write back at $T_4$; resets at $T_5$ entry via `ALU_EN` (`OP[2] = 1`).
 * **Internal $T_6$ Clear:** Subroutine Call (`CALL`), `NOP`, and Hardware Interrupt Hijack (`~IRQ`) run through $T_5$. The TIMING card self-resets at $T_6$ via direct hardware feedback ($\overline{T_6} \rightarrow \overline{\text{CLR}}$).
 
 ### Master Cycle Reset Rail Boolean Equation
 
-$$\overline{\text{CYCLE\_RESET}} = \overline{(T_2 \cdot \text{FAIL}) \lor (T_3 \cdot \text{Q1\_LDI}) \lor (T_3 \cdot \text{Q0\_MOVE}) \lor (T_4 \cdot \text{JMP\_RET}) \lor (T_5 \cdot \text{ALU\_EN})}$$
+$$\overline{\text{CYCLE\_RESET}} = \overline{(T_2 \cdot \text{FAIL}) \lor (T_3 \cdot \text{Q2\_LDI}) \lor (T_3 \cdot \text{Q0\_MOVE}) \lor (T_4 \cdot \text{JMP\_RET}) \lor (T_5 \cdot \text{ALU\_EN})}$$
 
 ---
 
@@ -103,7 +104,8 @@ $$\overline{\text{CYCLE\_RESET}} = \overline{(T_2 \cdot \text{FAIL}) \lor (T_3 \
 
 * **$T_0$ (Opcode Fetch):** `~OE[PCH]` and `~OE[PCL]` drive $PC$ to `ADDR_H/L`. ROM asserts `~OE[MEM]`, driving opcode onto `BUS[3:0]`. Opcode is latched into `OPCODE[3:0]` when `CLK` goes HIGH.
 * **$T_1$ (Operand Fetch):** On $T_1$ entry (`CLK` LOW), $PC$ increments ($PC \leftarrow PC_0 + 1$). ROM asserts `~OE[MEM]`, driving operand onto `BUS[3:0]`. Operand is latched into `OPERAND[3:0]` when `CLK` goes HIGH.
-* **$T_2$ (Source Drive & Setup Phase):** On $T_2$ entry (`CLK` LOW), $PC$ increments again ($PC \leftarrow PC_0 + 2$).
+* **$T_2$ (Source Drive & Setup Phase / Early Branch Termination):** On $T_2$ entry (`CLK` LOW), $PC$ increments again ($PC \leftarrow PC_0 + 2$).
+* *For Untaken Branch:* Steering tree evaluates `FAIL=1`. State counter receives `~CYCLE_RESET` immediately at $T_2$, aborting $T_3/T_4$ execution.
 * *For Moves/LDI:* `~OE[src]` or `~OE[OPERAND]` drives source to `BUS[3:0]`.
 * *For ALU Ops:* `~OE[src]` or `~OE[OPERAND]` drives operand into $ALU_B$ latch.
 
@@ -127,13 +129,13 @@ $$\overline{\text{CYCLE\_RESET}} = \overline{(T_2 \cdot \text{FAIL}) \lor (T_3 \
 | **Q0: Register Move** (`MOV dst, src`) | Fetch Opcode $\rightarrow$ `OPCODE` | Fetch Operand $\rightarrow$ `OPERAND` ($PC \leftarrow PC+1$) | Assert `~OE[SRC]` $\rightarrow$ `BUS` & `~WE[DST]` ($PC \leftarrow PC+1$) | Reset via `~CYCLE_RESET` | — | — |
 | **Q0: Memory Store** (`ST MEM, src`) | Fetch Opcode $\rightarrow$ `OPCODE` | Fetch Operand $\rightarrow$ `OPERAND` ($PC \leftarrow PC+1$) | Drive `RegC:RegD` to `ADDR`, Assert `~OE[SRC]` & `~WE[MEM]` ($PC \leftarrow PC+1$) | Reset via `~CYCLE_RESET` | — | — |
 | **Q0: Memory Load** (`LD dst, MEM`) | Fetch Opcode $\rightarrow$ `OPCODE` | Fetch Operand $\rightarrow$ `OPERAND` ($PC \leftarrow PC+1$) | Drive `RegC:RegD` to `ADDR`, Assert `~OE[MEM]` & `~WE[DST]` ($PC \leftarrow PC+1$) | Reset via `~CYCLE_RESET` | — | — |
-| **Q0: Jump Untaken** (`Jcc` False) | Fetch Opcode $\rightarrow$ `OPCODE` | Fetch Operand $\rightarrow$ `OPERAND` ($PC \leftarrow PC+1$) | Evaluate Steering Tree $\rightarrow$ `FAIL=1` ($PC \leftarrow PC+1$) | Reset via `~CYCLE_RESET` | — | — |
+| **Q0: Jump Untaken** (`Jcc` False) | Fetch Opcode $\rightarrow$ `OPCODE` | Fetch Operand $\rightarrow$ `OPERAND` ($PC \leftarrow PC+1$) | Evaluate Steering Tree $\rightarrow$ `FAIL=1`, Terminate instantly at $T_2$ | — | — | — |
 | **Q0: Jump Taken** (`JMP`, `Jcc` True) | Fetch Opcode $\rightarrow$ `OPCODE` | Fetch Operand $\rightarrow$ `OPERAND` ($PC \leftarrow PC+1$) | Assert `~OE[RegD]` $\rightarrow$ `BUS` & `~WE[PCL]` ($PC \leftarrow PC+1$) | Assert `~OE[RegC]` $\rightarrow$ `BUS` & `~WE[PCH]` | Reset via `~CYCLE_RESET` | — |
 | **Q0: Call Subroutine** (`CALL`) | Fetch Opcode $\rightarrow$ `OPCODE` | Fetch Operand $\rightarrow$ `OPERAND` ($PC \leftarrow PC+1$) | Push $PCL$ ($PC_0+2$) $\rightarrow \text{STK}$, Assert `~OE[RegD]` ($PC \leftarrow PC+1$) | Push $PCH$ ($PC_0+2$) $\rightarrow \text{STK}$, Assert `~OE[RegD]` & `~WE[PCL]` | Assert `~OE[RegC]` & `~WE[PCH]` | Hardware Self-Reset at $T_6$ |
 | **Q0: Return** (`RET` / `RETI`) | Fetch Opcode $\rightarrow$ `OPCODE` | Fetch Operand $\rightarrow$ `OPERAND` ($PC \leftarrow PC+1$) | Pop $\text{STK} \rightarrow PCH$ ($PC \leftarrow PC+1$) | Pop $\text{STK} \rightarrow PCL$ | Reset via `~CYCLE_RESET` | — |
-| **Q1: Load Immediate** (`LDI dst, #imm`) | Fetch Opcode $\rightarrow$ `OPCODE` | Fetch Operand $\rightarrow$ `OPERAND` ($PC \leftarrow PC+1$) | Assert `~OE[OPERAND]` $\rightarrow$ `BUS` & `~WE[DST]` ($PC \leftarrow PC+1$) | Reset via `~CYCLE_RESET` | — | — |
-| **Q2/Q3: Binary ALU** (`ADD`, `SUB`, etc.) | Fetch Opcode $\rightarrow$ `OPCODE` | Fetch Operand $\rightarrow$ `OPERAND` ($PC \leftarrow PC+1$) | Assert `~OE[SRC]` $\rightarrow$ Latch $ALU_B$ ($PC \leftarrow PC+1$) | Assert `~OE[DST]` $\rightarrow$ Latch $ALU_A$, Compute, Sample Flags | Assert $ALU_{OUT} \rightarrow \text{BUS}$ & `~WE[DST]` | Reset via `~CYCLE_RESET` |
-| **Q2/Q3: Compare** (`CMP dst, src`) | Fetch Opcode $\rightarrow$ `OPCODE` | Fetch Operand $\rightarrow$ `OPERAND` ($PC \leftarrow PC+1$) | Assert `~OE[SRC]` $\rightarrow$ Latch $ALU_B$ ($PC \leftarrow PC+1$) | Assert `~OE[DST]` $\rightarrow$ Latch $ALU_A$, Compute, Sample Flags | Inhibit `~WE[DST]` writeback | Reset via `~CYCLE_RESET` |
+| **Q1: Reg-Reg ALU** (`ADD`, `SUB`, etc.) | Fetch Opcode $\rightarrow$ `OPCODE` | Fetch Operand $\rightarrow$ `OPERAND` ($PC \leftarrow PC+1$) | Assert `~OE[SRC]` $\rightarrow$ Latch $ALU_B$ ($PC \leftarrow PC+1$) | Assert `~OE[DST]` $\rightarrow$ Latch $ALU_A$, Compute, Sample Flags | Assert $ALU_{OUT} \rightarrow \text{BUS}$ & `~WE[DST]` | Reset via `~CYCLE_RESET` |
+| **Q2: Load Immediate** (`LDI dst, #imm`) | Fetch Opcode $\rightarrow$ `OPCODE` | Fetch Operand $\rightarrow$ `OPERAND` ($PC \leftarrow PC+1$) | Assert `~OE[OPERAND]` $\rightarrow$ `BUS` & `~WE[DST]` ($PC \leftarrow PC+1$) | Reset via `~CYCLE_RESET` | — | — |
+| **Q3: Immediate ALU** (`ADDI`, `SUBI`, etc.) | Fetch Opcode $\rightarrow$ `OPCODE` | Fetch Operand $\rightarrow$ `OPERAND` ($PC \leftarrow PC+1$) | Assert `~OE[OPERAND]` $\rightarrow$ Latch $ALU_B$ ($PC \leftarrow PC+1$) | Assert `~OE[DST]` $\rightarrow$ Latch $ALU_A$, Compute, Sample Flags | Assert $ALU_{OUT} \rightarrow \text{BUS}$ & `~WE[DST]` | Reset via `~CYCLE_RESET` |
 | **Hardware Interrupt** (`~IRQ` Entry) | Freeze $PC$, `~IR_DISABLE` LOW | Push $PCL_{\text{return}}$ ($PC_0+2$) $\rightarrow \text{STK}$ | Push $PCH_{\text{return}}$ ($PC_0+2$) $\rightarrow \text{STK}$ | Drive Vector Low $\rightarrow \text{PCL}$ | Drive Vector High $\rightarrow \text{PCH}$ | Hardware Self-Reset at $T_6$, release `~IR_DISABLE` |
 
 ---
@@ -233,21 +235,6 @@ $$\overline{\text{CYCLE\_RESET}} = \overline{(T_2 \cdot \text{FAIL}) \lor (T_3 \
 
 ```
 
-### Universal 13-Pin Base-to-Daughtercard Interface
-
-Base Cards requiring auto-increment/decrement (PCL, PCH, STK) interface with Counter Daughtercards via a 13-pin socket:
-
-```
- Pin 1: VCC (+5V)          Pin 6:  D[0] (Data In 0)    Pin 10: Q[0] (Latch Out 0)
- Pin 2: GND                Pin 7:  D[1] (Data In 1)    Pin 11: Q[1] (Latch Out 1)
- Pin 3: ~T_STEP_A          Pin 8:  D[2] (Data In 2)    Pin 12: Q[2] (Latch Out 2)
- Pin 4: ~T_STEP_B          Pin 9:  D[3] (Data In 3)    Pin 13: Q[3] (Latch Out 3)
- Pin 5: ~COUNT_LATCH (Base Card Internal Latch Enable Pulse)
-
-```
-
-* **Surface Carry Pins (`C_IN` / `C_OUT`):** 2-pin header on the Counter Daughtercard PCB. Bridging PCL Daughtercard $C_{\text{out}} \rightarrow$ PCH Daughtercard $C_{\text{in}}$ enables 8-bit ripple-carry incrementing during fetches.
-
 ---
 
 ## 7. Quadrant Instruction Matrix & Sub-Operations
@@ -276,51 +263,51 @@ FAIL = ~P0 . (~P1 . ~ZF | P1 . ~CF)  |  P0 . (~P1 . ZF)
 | **`00 01 01 01`** | `00010101` | `0x15` | `STI` | Set Interrupt Enable Flag ($IE \leftarrow 1$). Resets at $T_3$. |
 | **`00 01 10 01`** | `00011001` | `0x19` | `RETI` | Return from Interrupt: Pop $PCH:PCL$ from stack, set $IE \leftarrow 1$. Resets at $T_4$. |
 | **`00 01 11 01`** | `00011101` | `0x1D` | `HALT` | Asserts Halt Latch and drives `~IR_DISABLE` LOW until reset or IRQ. |
-| **`00 10 00 10`** | `00100010` | `0x22` | `JZ` / `JE` | Branch to address in `RegC:RegD` if $ZF = 1$. Resets at $T_2$ (FAIL) or $T_4$ (Taken). |
-| **`00 10 01 10`** | `00100110` | `0x26` | `JC` / `JAE` | Branch to address in `RegC:RegD` if $CF = 1$. Resets at $T_2$ (FAIL) or $T_4$ (Taken). |
-| **`00 10 10 10`** | `00101010` | `0x2A` | `JNZ` / `JNE` | Branch to address in `RegC:RegD` if $ZF = 0$. Resets at $T_2$ (FAIL) or $T_4$ (Taken). |
-| **`00 10 11 10`** | `00101110` | `0x2E` | `JMP` | Unconditional Branch to address in `RegC:RegD`. Resets at $T_4$. |
-| **`00 11 00 11`** | `00110011` | `0x33` | `CALL` | Push $PCL$ ($PC_0+2$), Push $PCH$ ($PC_0+2$), load `RegC:RegD` into `PCH:PCL`. Resets at $T_6$. |
+| **`00 10 00 10`** | `00100010` | `0x22` | `JZ` / `JE` | Branch to `RegC:RegD` if $ZF = 1$. Resets at $T_2$ (FAIL) or $T_4$ (Taken). |
+| **`00 10 01 10`** | `00100110` | `0x26` | `JC` / `JAE` | Branch to `RegC:RegD` if $CF = 1$. Resets at $T_2$ (FAIL) or $T_4$ (Taken). |
+| **`00 10 10 10`** | `00101010` | `0x2A` | `JNZ` / `JNE` | Branch to `RegC:RegD` if $ZF = 0$. Resets at $T_2$ (FAIL) or $T_4$ (Taken). |
+| **`00 10 11 10`** | `00101110` | `0x2E` | `JMP` | Unconditional Branch to `RegC:RegD`. Resets at $T_4$. |
+| **`00 11 00 11`** | `00110011` | `0x33` | `CALL` | Push $PCL$, Push $PCH$, load `RegC:RegD` into `PCH:PCL`. Resets at $T_6$. |
 | **`00 11 01 11`** | `00110111` | `0x37` | `RET` | Pop $PCH$, Pop $PCL$ from stack into `PCH:PCL`. Resets at $T_4$. |
-| **`00 11 10 11`** | `00111011` | `0x3B` | `PUSHPC` | Push current $PCL$ then $PCH$ ($PC_0+2$) to hardware stack. Resets at $T_4$. |
+| **`00 11 10 11`** | `00111011` | `0x3B` | `PUSHPC` | Push current $PCL$ then $PCH$ ($PC_0+2$) to stack. Resets at $T_4$. |
 
 ---
 
-### Quadrant 1 (`OP[3:2] = 01`): Load Immediate (`LDI`)
+### Quadrant 1 (`OP[3:2] = 01`): Reg-to-Reg Binary ALU
 
-Opcode Format: `01 dd cc 00` (`OPERAND[3:0]` = 4-Bit Immediate Data). Fixed 3-step execution (resets at $T_3$).
-
-| Opcode (`OPCODE[3:0]`) | Mnemonic | Destination Target | Execution Sequence ($T_2$) |
-| --- | --- | --- | --- |
-| **`01 00 00 00` (`0x40`)** | `LDI RegA, #imm` | RegA (Slot 0) | `OPERAND[3:0]` $\rightarrow$ `BUS[3:0]`, assert `~OE[OPERAND]` & `~WE[0]` |
-| **`01 01 00 00` (`0x50`)** | `LDI RegB, #imm` | RegB (Slot 1) | `OPERAND[3:0]` $\rightarrow$ `BUS[3:0]`, assert `~OE[OPERAND]` & `~WE[1]` |
-| **`01 10 00 00` (`0x60`)** | `LDI RegC, #imm` | RegC (Slot 2) | `OPERAND[3:0]` $\rightarrow$ `BUS[3:0]`, assert `~OE[OPERAND]` & `~WE[2]` |
-| **`01 11 00 00` (`0x70`)** | `LDI RegD, #imm` | RegD (Slot 3) | `OPERAND[3:0]` $\rightarrow$ `BUS[3:0]`, assert `~OE[OPERAND]` & `~WE[3]` |
-| **`01 00 01 00` (`0x44`)** | `LDI MEM, #imm` | RAM[`RegC:RegD`] | `OPERAND[3:0]` $\rightarrow$ `BUS[3:0]`, assert `~OE[OPERAND]` & `~WE[4]` |
-| **`01 01 01 00` (`0x54`)** | `LDI PCH, #imm` | PCH (Slot 5) | `OPERAND[3:0]` $\rightarrow$ `BUS[3:0]`, assert `~OE[OPERAND]` & `~WE[5]` |
-| **`01 10 01 00` (`0x64`)** | `LDI PCL, #imm` | PCL (Slot 6) | `OPERAND[3:0]` $\rightarrow$ `BUS[3:0]`, assert `~OE[OPERAND]` & `~WE[6]` |
-| **`01 11 01 00` (`0x74`)** | `LDI STK, #imm` | Stack Core (Slot 7) | `OPERAND[3:0]` $\rightarrow$ `BUS[3:0]`, assert `~OE[OPERAND]` & `~WE[7]` |
-
----
-
-### Quadrant 2 (`OP[3:2] = 10`): Reg-to-Reg Binary ALU
-
-Opcode Format: `10 op1 op0 dd` (`OPERAND[1:0]` = Source Register `ss`). Target `dst` acts as dynamic accumulator. Fixed 5-step execution (resets at $T_5$).
+Opcode Format: `01 op1 op0 dd` (`OPERAND[1:0]` = Source Register `ss`). Target `dst` acts as dynamic accumulator (`OP[1:0]`). Fixed 5-step execution (resets at $T_5$).
 
 | Opcode Pattern | Mnemonic | ALU Function | Operational Pipeline Sequence | Flag Updates |
 | --- | --- | --- | --- | --- |
-| **`10 00 00 dd`** | `ADD dst, src` | Binary Addition | $T_2$: $src \rightarrow ALU_B$; $T_3$: $dst \rightarrow ALU_A$, Compute; $T_4$: $ALU_{OUT} \rightarrow dst$ | $ZF, CF$ |
-| **`10 01 00 dd`** | `SUB dst, src` | Binary Subtraction | $T_2$: $src \rightarrow ALU_B$; $T_3$: $dst \rightarrow ALU_A$, Compute; $T_4$: $ALU_{OUT} \rightarrow dst$ | $ZF, CF$ |
-| **`10 10 00 dd`** | `AND dst, src` | Bitwise AND | $T_2$: $src \rightarrow ALU_B$; $T_3$: $dst \rightarrow ALU_A$, Compute; $T_4$: $ALU_{OUT} \rightarrow dst$ | $ZF$ ($CF \leftarrow 0$) |
-| **`10 11 00 dd`** | `OR dst, src` | Bitwise OR | $T_2$: $src \rightarrow ALU_B$; $T_3$: $dst \rightarrow ALU_A$, Compute; $T_4$: $ALU_{OUT} \rightarrow dst$ | $ZF$ ($CF \leftarrow 0$) |
-| **`10 00 01 dd`** | `XOR dst, src` | Bitwise XOR | $T_2$: $src \rightarrow ALU_B$; $T_3$: $dst \rightarrow ALU_A$, Compute; $T_4$: $ALU_{OUT} \rightarrow dst$ | $ZF$ ($CF \leftarrow 0$) |
-| **`10 01 01 dd`** | `CMP dst, src` | Compare (No Write) | $T_2$: $src \rightarrow ALU_B$; $T_3$: $dst \rightarrow ALU_A$, Compute, Sample Flags; $T_4$: Writeback Inhibited | $ZF, CF$ |
+| **`01 00 00 dd`** | `ADD dst, src` | Binary Addition | $T_2$: $src \rightarrow ALU_B$; $T_3$: $dst \rightarrow ALU_A$, Compute; $T_4$: $ALU_{OUT} \rightarrow dst$ | $ZF, CF$ |
+| **`01 01 00 dd`** | `SUB dst, src` | Binary Subtraction | $T_2$: $src \rightarrow ALU_B$; $T_3$: $dst \rightarrow ALU_A$, Compute; $T_4$: $ALU_{OUT} \rightarrow dst$ | $ZF, CF$ |
+| **`01 10 00 dd`** | `AND dst, src` | Bitwise AND | $T_2$: $src \rightarrow ALU_B$; $T_3$: $dst \rightarrow ALU_A$, Compute; $T_4$: $ALU_{OUT} \rightarrow dst$ | $ZF$ ($CF \leftarrow 0$) |
+| **`01 11 00 dd`** | `OR dst, src` | Bitwise OR | $T_2$: $src \rightarrow ALU_B$; $T_3$: $dst \rightarrow ALU_A$, Compute; $T_4$: $ALU_{OUT} \rightarrow dst$ | $ZF$ ($CF \leftarrow 0$) |
+| **`01 00 01 dd`** | `XOR dst, src` | Bitwise XOR | $T_2$: $src \rightarrow ALU_B$; $T_3$: $dst \rightarrow ALU_A$, Compute; $T_4$: $ALU_{OUT} \rightarrow dst$ | $ZF$ ($CF \leftarrow 0$) |
+| **`01 01 01 dd`** | `CMP dst, src` | Compare (No Write) | $T_2$: $src \rightarrow ALU_B$; $T_3$: $dst \rightarrow ALU_A$, Compute, Sample Flags; $T_4$: Writeback Inhibited | $ZF, CF$ |
+
+---
+
+### Quadrant 2 (`OP[3:2] = 10`): Load Immediate (`LDI`)
+
+Opcode Format: `10 dd cc 00` (`OPERAND[3:0]` = 4-Bit Immediate Data). Fixed 3-step execution (resets at $T_3$).
+
+| Opcode (`OPCODE[3:0]`) | Mnemonic | Destination Target | Execution Sequence ($T_2$) |
+| --- | --- | --- | --- |
+| **`10 00 00 00` (`0x80`)** | `LDI RegA, #imm` | RegA (Slot 0) | `OPERAND[3:0]` $\rightarrow$ `BUS[3:0]`, assert `~OE[OPERAND]` & `~WE[0]` |
+| **`10 01 00 00` (`0x90`)** | `LDI RegB, #imm` | RegB (Slot 1) | `OPERAND[3:0]` $\rightarrow$ `BUS[3:0]`, assert `~OE[OPERAND]` & `~WE[1]` |
+| **`10 10 00 00` (`0xA0`)** | `LDI RegC, #imm` | RegC (Slot 2) | `OPERAND[3:0]` $\rightarrow$ `BUS[3:0]`, assert `~OE[OPERAND]` & `~WE[2]` |
+| **`10 11 00 00` (`0xB0`)** | `LDI RegD, #imm` | RegD (Slot 3) | `OPERAND[3:0]` $\rightarrow$ `BUS[3:0]`, assert `~OE[OPERAND]` & `~WE[3]` |
+| **`10 00 01 00` (`0x84`)** | `LDI MEM, #imm` | RAM[`RegC:RegD`] | `OPERAND[3:0]` $\rightarrow$ `BUS[3:0]`, assert `~OE[OPERAND]` & `~WE[4]` |
+| **`10 01 01 00` (`0x94`)** | `LDI PCH, #imm` | PCH (Slot 5) | `OPERAND[3:0]` $\rightarrow$ `BUS[3:0]`, assert `~OE[OPERAND]` & `~WE[5]` |
+| **`10 10 01 00` (`0xA4`)** | `LDI PCL, #imm` | PCL (Slot 6) | `OPERAND[3:0]` $\rightarrow$ `BUS[3:0]`, assert `~OE[OPERAND]` & `~WE[6]` |
+| **`10 11 01 00` (`0xB4`)** | `LDI STK, #imm` | Stack Core (Slot 7) | `OPERAND[3:0]` $\rightarrow$ `BUS[3:0]`, assert `~OE[OPERAND]` & `~WE[7]` |
 
 ---
 
 ### Quadrant 3 (`OP[3:2] = 11`): Immediate ALU & Shift Matrix
 
-Opcode Format: `11 op1 op0 dd`. `OPERAND[3:0]` decodes immediate operation and carry propagation settings. Fixed 5-step execution (resets at $T_5$).
+Opcode Format: `11 op1 op0 dd`. `OPERAND[3:0]` decodes immediate operation and carry settings. Fixed 5-step execution (resets at $T_5$).
 
 $$\text{OPERAND}[3:0] = [\text{EXT} \mid \text{ALU\_OP1} \mid \text{ALU\_OP0} \mid \text{IMM0}]$$
 
@@ -344,21 +331,6 @@ $$\text{OPERAND}[3:0] = [\text{EXT} \mid \text{ALU\_OP1} \mid \text{ALU\_OP0} \m
 ## 8. Hardware Vector Hijack Subsystem (Interrupt Engine)
 
 When `~IRQ` fires while $IE = 1$, the Interrupt Card forces `~IR_DISABLE` LOW at $T_0$, freezing program counter auto-increments ($PC$ remains fixed at $PC_{\text{return}} = PC_0 + 2$) and executing a 6-step hardware vector hijack:
-
-```
-  External I/O Cards
-  assert ~IRQ (Pin 06) ──► [ Latch 1: IRQ_REQ ] ──┐
-                                  ▲               │   T0 Strobe
-                                  │               ├───────AND───────► Set HIJACK_RUN
-                            Clear at T0 ──────────┴──────┐   (IE = 1)        Clear IRQ_REQ
-                                                         ▼                   Clear IE
-                           ┌─────────────────┐
-                           │Latch 2: HIJACK  │ ─────────► Drives ~IR_DISABLE (Pin 05) LOW
-                           └─────────────────┘
-                                    ▲
-                              Clear at T6 (Natural Hardware Counter Clear)
-
-```
 
 * **$T_0$ — Hijack Entry & Lock:** `~IR_DISABLE` asserts LOW, $PC$ auto-increment disabled ($PC$ locked at $PC_{\text{return}}$), $IE \leftarrow 0$, `IRQ_REQ` cleared, `HIJACK_RUN` set. Forced `0x00` NOP into instruction pipeline.
 * **$T_1$ — Push $PCL$:** Interrupt card drives $PCL$ ($PC_{\text{return}}$ Low) onto `BUS[3:0]` and asserts `~WE[7]` (`STK_PUSH`, $SP \leftarrow SP - 1$).
