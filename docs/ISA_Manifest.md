@@ -235,6 +235,21 @@ $$\overline{\text{CYCLE\_RESET}} = \overline{(T_2 \cdot \text{FAIL}) \lor (T_3 \
 
 ```
 
+### Universal 13-Pin Base-to-Daughtercard Interface
+
+Base Cards requiring auto-increment/decrement (`PCL`, `PCH`, `STK`) interface with Counter Daughtercards via a 13-pin socket:
+
+```
+ Pin 1: VCC (+5V)          Pin 6:  D[0] (Data In 0)    Pin 10: Q[0] (Latch Out 0)
+ Pin 2: GND                Pin 7:  D[1] (Data In 1)    Pin 11: Q[1] (Latch Out 1)
+ Pin 3: ~T_STEP_A          Pin 8:  D[2] (Data In 2)    Pin 12: Q[2] (Latch Out 2)
+ Pin 4: ~T_STEP_B          Pin 9:  D[3] (Data In 3)    Pin 13: Q[3] (Latch Out 3)
+ Pin 5: ~COUNT_LATCH (Base Card Internal Latch Enable Pulse)
+
+```
+
+* **Surface Carry Pins ($C_{\text{in}}$ / $C_{\text{out}}$):** 2-pin header on the Counter Daughtercard PCB. Bridging `PCL` Daughtercard $C_{\text{out}} \rightarrow$ `PCH` Daughtercard $C_{\text{in}}$ enables 8-bit ripple-carry incrementing during fetches.
+
 ---
 
 ## 7. Quadrant Instruction Matrix & Sub-Operations
@@ -329,6 +344,23 @@ $$\text{OPERAND}[3:0] = [\text{EXT} \mid \text{ALU\_OP1} \mid \text{ALU\_OP0} \m
 ---
 
 ## 8. Hardware Vector Hijack Subsystem (Interrupt Engine)
+
+### Interrupt Engine Sequence & State Diagram
+
+```
+ External I/O Cards
+ assert ~IRQ (Pin 06) ──► [ Latch 1: IRQ_REQ ] ──┐
+                                   ▲               │   T0 Strobe
+                                   │               ├───────AND───────► Set HIJACK_RUN
+                            Clear at T0 ──────────┴──────┐   (IE = 1)        Clear IRQ_REQ
+                                                         ▼                   Clear IE
+                            ┌─────────────────┐
+                            │Latch 2: HIJACK  │ ─────────► Drives ~IR_DISABLE (Pin 05) LOW
+                            └─────────────────┘
+                                   ▲
+                              Clear at T6 (Natural Hardware Counter Clear)
+
+```
 
 When `~IRQ` fires while $IE = 1$, the Interrupt Card forces `~IR_DISABLE` LOW at $T_0$, freezing program counter auto-increments ($PC$ remains fixed at $PC_{\text{return}} = PC_0 + 2$) and executing a 6-step hardware vector hijack:
 
