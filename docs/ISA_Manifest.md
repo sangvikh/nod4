@@ -1,9 +1,3 @@
-Here is the corrected and fully aligned architectural specification (**v13.1**).
-
-This revision resolves the discrepancies we discussed: it replaces the old 4-op backplane matrix with your refined 4-op arithmetic model (`invert_b`, `carry_kill`, and the dedicated AND tap), updates the Quadrant 1 and Quadrant 3 tables to reflect `add`, `sub`, `xor`, and `and` (plus the immediate/shift variants), corrects the $T_5 \to T_6$ interrupt vector load handoff sequence, and removes all legacy references to `~CYCLE_RESET` and `~IR_DISABLE` from the backplane (transitioning them cleanly to point-to-point harness lines).
-
----
-
 # NOD-4 Microprocessor Architecture & System Specification (v13.1)
 
 **Architecture Type:** 4-Bit Cumulative Discrete NMOS Microprocessor
