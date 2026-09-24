@@ -379,3 +379,68 @@ Early cycle termination is governed by combinational state logic on the Central 
 | **28** | `OPERAND[1]` | Operand Rail | Bit 1 of Fetched Instruction Operand (`src1` / `ext`) |
 | **29** | `OPERAND[2]` | Operand Rail | Bit 2 of Fetched Instruction Operand (`code0` / `alu_op0`) |
 | **30** | `OPERAND[3]` | Operand Rail | Bit 3 of Fetched Instruction Operand (`cc1` / `alu_op1` / `imm3`) |
+
+---
+
+## 9. Universal Base Card (UBC) Output Architecture
+
+Each Universal Base Card (UBC) provides two gated output drivers per register cell: a primary output (~OE1) for the main data bus, and a secondary output (~OE2) routed to a 4-pin jumper header. 
+
+```
+                +-------------------------------------------------------+
+                |           UNIVERSAL BASE CARD (UBC-REG)               |
+                |                                                       |
+                |   +-----------+   ~OE1 (Driven by Decoder Harness)    |
+                |   | Register  | ------------------------------------> | BUS[3:0]
+                |   |   Cell    |                                       |
+                |   |           |   ~OE2 (Driven by Decoder Harness)    |
+                |   +-----------+ ------------------------------------> | 4-Pin Header
+                +-------------------------------------------------------+      |
+                                                                               v
+                                                                  Jumpered to: ADDR_H / ADDR_L /
+                                                                               OPCODE / OPERAND
+
+```
+
+### Bus Driving & Secondary Rail Routing
+
+* **Primary Bus Drive (`~OE1`):** Driven by external decoder lines (`~OE_RegA`, `~OE_RegB`, etc.) to gate register contents onto the main data bus (`BUS[3:0]`).
+* **Secondary Rail Bridge (`~OE2`):** Driven by secondary decoder lines (`~OE_RegC_ADDR`, etc.) to drive non-data backplane rails. The 4 output pins of `~OE2` pass to a physical 4-pin header, bridged directly to target backplane rail pins (`ADDR_H`, `ADDR_L`, `OPCODE`, or `OPERAND`).
+
+---
+
+## 10. Hardware Configuration
+
+The UBC PCB contains no onboard decoding, address switches, or termination resistors. The only hardware configuration on the card is the physical 4-pin Secondary Port Route Header.
+
+```
+                     SECONDARY PORT ROUTE HEADER
+                     [o o o o] Secondary Output Pins
+                        | | | |
+                        v v v v  (Bridge wires / 4-pin jumper cable)
+                     [ADDR / OP / OPERAND Rail Pins]
+
+```
+
+### Configuration Summary
+
+| Interface | Connection | Operational Function |
+| --- | --- | --- |
+| **Secondary Port Header** | **4-Pin Wire / Jumper Bridge** | Bridges 4-bit `~OE2` outputs directly to target backplane rail pins.<br>
+
+<br>• `UBC Slot 2`: Jumpered to **`ADDR_H`** (RegC port) and **`ADDR_L`** (RegD port).<br>
+
+<br>• Optional expansion: Bridge to `OPCODE[3:0]` or `OPERAND[3:0]`. |
+
+---
+
+### Standard Slot Setup Guide
+
+* **UBC Slot 1 (`UBC-REG1` — RegA / RegB Harness):**
+* **Control Harness:** Connected to Decoder lines `~OE_RegA`, `~OE_RegB`, `~WE_RegA`, `~WE_RegB`.
+* **Secondary Port:** Unpopulated / Open.
+
+
+* **UBC Slot 2 (`UBC-REG2` — RegC / RegD Harness):**
+* **Control Harness:** Connected to Decoder lines `~OE_RegC`, `~OE_RegD`, `~WE_RegC`, `~WE_RegD`.
+* **Secondary Port:** Jumpered directly to **`ADDR_H`** (RegC) and **`ADDR_L`** (RegD) backplane pins.
