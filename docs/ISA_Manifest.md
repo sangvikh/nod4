@@ -1,4 +1,4 @@
-# NOD-4 Microprocessor Architecture & System Specification (v14.5 Master Core)
+# NOD-4 Microprocessor Architecture & System Specification (v14.6 Master Core)
 
 **Architecture Type:** 4-Bit Cumulative Discrete NMOS Microprocessor
 
@@ -101,7 +101,7 @@ The architecture establishes three independent, persistent pointers with clean f
 
 1. **`RegA:RegB` / `CPH:CPL` (Control-Flow Target Pointer):** Holds the persistent 8-bit destination address for `CALL [RegA:RegB]` and jump targets. Executing a subroutine call **uses** `RegA:RegB` as the target vector without altering its contents or disturbing `RegC:RegD`.
 2. **`RegC:RegD` / `DPH:DPL` (Data-Memory Pointer):** Drives the active 8-bit external address bus (`ADDR_H[3:0]`, `ADDR_L[3:0]`) whenever `MEM` is referenced in Q0. A subroutine can call helper routines via `RegA:RegB` while preserving its active data memory index in `RegC:RegD`.
-3. **`SP` (Hardware Stack Pointer):** Points to a dedicated internal 16-entry $\times$ 8-bit return address stack (completely independent from the 256 $\times$ 4-bit unified RAM). Executing `ADDI SP, #imm2` provides first-class, software-visible stack frame adjustment.
+3. **`SP` (Hardware Stack Pointer):** Points to a dedicated internal 16-entry $\times$ 8-bit return address stack (completely independent from the 256 $\times$ 4-bit unified RAM). Executing `ADDI SP, #1` or `SUBI SP, #1` provides first-class, software-visible stack frame adjustments.
 
 ### Q0 Dual High-Bit Bank Matrix (`opr[3:2]`)
 
@@ -215,12 +215,12 @@ Instruction execution utilizes two sequentially fetched 4-bit nibbles: `OPCODE[3
 
 ```text
          OPCODE NIBBLE (Fetched First)               OPERAND NIBBLE (Fetched Second)
-     ┌───────┬─────────┬─────────┬─────────┐     ┌───────────┬───────────┬───────────────┐
-     │  IMM  │ ALU_EN  │  dst1   │  dst0   │     │ OPERAND[3]│ OPERAND[2]│ OPERAND[1:0]  │
-     └───────┴─────────┴─────────┴─────────┘     └───────────┴───────────┴───────────────┘
-     ◄────── OP[3:2] ─► ◄── dst[1:0] ─────►        SYS Select   OP / MODE    Payload / Mode
-        (Quadrant Select)   (ALWAYS HERE)          (0: General   (0: ADD/ADC  (#imm2 payload or
-                                                    1: System)    1: SUB/Unary) Unary Sub-Opcode)
+     ┌───────┬─────────┬─────────┬─────────┐     ┌───────────┬───────────┬───────────┬───────────┐
+     │  IMM  │ ALU_EN  │  dst1   │  dst0   │     │ OPERAND[3]│ OPERAND[2]│ OPERAND[1]│ OPERAND[0]│
+     └───────┴─────────┴─────────┴─────────┘     └───────────┴───────────┴───────────┴───────────┘
+     ◄────── OP[3:2] ─► ◄── dst[1:0] ─────►        SYS Select   ADD/SUB or   EXT Mode    IMM1 or
+        (Quadrant Select)   (ALWAYS HERE)         (0: General   Unary Op     (0: Arith   Unary SubOp
+                                                   1: System)   Selector      1: Unary)   (0:#0, 1:#1)
 
 ```
 
@@ -231,7 +231,7 @@ Instruction execution utilizes two sequentially fetched 4-bit nibbles: `OPCODE[3
 | **Q0** | `00` | Data Moves & Control Escapes | Dual-bank register/memory moves (`opr[3:2]`). Diagonal opcodes ($dd == ss$) decode control escapes (`CALL`, `RET`, `NOP`, `SWI`). |
 | **Q1** | `01` | Reg-to-Reg Binary ALU | 4-function binary ALU (`ADD`, `SUB`, `XOR`, `AND`) targeting General Bank registers (`RegA`–`RegD`). |
 | **Q2** | `10` | Load Immediate (`LDI`) | Drives 4-bit literal `#imm` payload directly from `OPERAND[3:0]` onto `BUS[3:0]` to target `dst[1:0]`. |
-| **Q3** | `11` | Immediate ALU, Unary & Shifts | System/General 2-bit immediate math (`ADDI`/`SUBI` with `#imm2`), multi-nibble carry propagation (`ADC`/`SBB`), and unary matrix (`NOT`/`SHR`/`RCR`/`CLR`). |
+| **Q3** | `11` | Immediate ALU, Unary & Shifts | System/General 1-bit immediate math (`ADDI`/`SUBI` with `#imm1`), multi-nibble carry propagation (`ADC`/`SBB`), and fully orthogonal dual-bank unary matrix (`NOT`/`SHR`/`RCR`/`CLR` using `opr[1]` as `EXT`). |
 
 ---
 
@@ -293,42 +293,48 @@ Loads a 4-bit literal value (`#imm[3:0]`, `#0..15`) directly into target registe
 
 ### Quadrant 3: Immediate ALU, Carry Propagate & Unary/Shift Matrix (`OPCODE = 11_dd`)
 
-Bit `OPERAND[3]` selects target bank (`SYS`). Bit `OPERAND[2]` switches between Immediate Addition / Carry Propagation (`MODE = 0`) and Subtraction / Unary / Shift Matrix (`MODE = 1`). `OPCODE[1:0]` strictly specifies the target register ($dst$).
+Bit `opr[3]` selects target bank (`SYS`), bit `opr[1]` acts as the `EXT` mode switch, and `OPCODE[1:0]` strictly specifies the target register ($dst$).
 
-In Q3 immediate modes, the payload is a **2-bit immediate literal** (`#imm2`, range `#0..3`) encoded in `opr[1:0]`.
+Because `opr[3]` (`SYS`) remains active across the **entire quadrant**, all arithmetic and unary operations target both **General** (`SYS = 0`) and **System** (`SYS = 1`) banks with 100% orthogonality.
 
 ```text
-                      OPERAND[3:0] DECODE TREE (Q3)
-                                   │
-         ┌─────────────────────────┴─────────────────────────┐
-         │                                                   │
-  OPERAND[3] = 0 (General Bank)                       OPERAND[3] = 1 (System Bank)
-         │                                                   │
-   ┌─────┴─────┐                                       ┌─────┴─────┐
-   │           │                                       │           │
-OPR[2]=0    OPR[2]=1                                OPR[2]=0    OPR[2]=1
-(ADD/ADC)   (SUB/SBB)                               (ADD/ADC)   (Unary Matrix)
+                      Q3 OPERAND NIBBLE DECODING (opr[3:0])
+  ┌──────────────┬──────────────┬──────────────┬──────────────┐
+  │    opr[3]    │    opr[2]    │    opr[1]    │    opr[0]    │
+  ├──────────────┼──────────────┼──────────────┼──────────────┤
+  │   SYS_SEL    │  OP / SUBOP  │   EXT MODE   │  IMM1 / SUBOP│
+  │ (0: General) │ (0: ADD/NOT) │ (0: Arith)   │   (0: #0)    │
+  │ (1: System)  │ (1: SUB/RCR) │ (1: Unary)   │   (1: #1)    │
+  └──────────────┴──────────────┴──────────────┴──────────────┘
 
 ```
 
+#### 1. Arithmetic Mode (`opr[1] = 0` / `EXT = 0`)
+
+* `opr[2]` specifies operation: `0` = Addition family, `1` = Subtraction family.
+* `opr[0]` provides the 1-bit immediate (`IMM1`): `0` = `#0` (Carry propagation `ADC`/`SBB`), `1` = `#1` (`ADDI`/`SUBI`).
+
+#### 2. Unary / Shift Mode (`opr[1] = 1` / `EXT = 1`)
+
+* `opr[2]` and `opr[0]` act as a 2-bit sub-opcode selector: `00` = `NOT`, `01` = `SHR`, `10` = `RCR`, `11` = `CLR`.
+* Allows `SHR RegA` (General) and `SHR RegFLAGS` ($UF$ LSB ejection) to share identical decoding.
+
 #### Master Q3 Decoding Table
 
-| `opr[3]` (`SYS`) | `opr[2]` (`MODE`) | `opr[1:0]` | Mnemonic | Hardware Action | Flags |
-| --- | --- | --- | --- | --- | --- |
-| **`0`** | **`0`** | **`00_2`** | **`ADC Gen`** | $dst_{\text{Gen}} \leftarrow dst + 0 + CF$ | $ZF, CF$ |
-| **`0`** | **`0`** | `#imm2` | **`ADDI Gen, #imm2`** | $dst_{\text{Gen}} \leftarrow dst + \#imm2$ ($#0..3$) | $ZF, CF$ |
-| **`0`** | **`1`** | **`00_2`** | **`SBB Gen`** | $dst_{\text{Gen}} \leftarrow dst + 0x0F + CF$ | $ZF, CF$ |
-| **`0`** | **`1`** | `#imm2` | **`SUBI Gen, #imm2`** | $dst_{\text{Gen}} \leftarrow dst + \overline{\#imm2} + 1$ ($#0..3$) | $ZF, CF$ |
-| **`1`** | **`0`** | **`00_2`** | **`ADC Sys`** | $dst_{\text{Sys}} \leftarrow dst + 0 + CF$ | $ZF, CF$ |
-| **`1`** | **`0`** | `#imm2` | **`ADDI Sys, #imm2`** | $dst_{\text{Sys}} \leftarrow dst + \#imm2$ *(e.g., `ADDI SP, #1`)* | $ZF, CF$ |
-| **`1`** | **`1`** | **`00_2`** | **`NOT dst`** | $dst \leftarrow \overline{dst}$ | $ZF$ |
-| **`1`** | **`1`** | **`01_2`** | **`SHR dst`** | $dst[3] \leftarrow 0, dst[i] \leftarrow dst[i+1], dst[0] \rightarrow CF$ | $ZF, CF$ |
-| **`1`** | **`1`** | **`10_2`** | **`RCR dst`** | $dst[3] \leftarrow CF, dst[i] \leftarrow dst[i+1], dst[0] \rightarrow CF$ | $ZF, CF$ |
-| **`1`** | **`1`** | **`11_2`** | **`CLR dst`** | $dst \leftarrow 0\text{x0}$ | $ZF \leftarrow 1, CF \leftarrow 0$ |
+| `opr[3]` (`SYS`) | `opr[2]` | `opr[1]` (`EXT`) | `opr[0]` | Mnemonic | Hardware Action | Flags |
+| --- | --- | --- | --- | --- | --- | --- |
+| **`0` / `1**` | **`0`** | **`0`** | **`0`** | **`ADC dst`** | $dst \leftarrow dst + 0 + CF$ | $ZF, CF$ |
+| **`0` / `1**` | **`0`** | **`0`** | **`1`** | **`ADDI dst, #1`** | $dst \leftarrow dst + 1$ | $ZF, CF$ |
+| **`0` / `1**` | **`1`** | **`0`** | **`0`** | **`SBB dst`** | $dst \leftarrow dst + 0\text{x0F} + CF$ | $ZF, CF$ |
+| **`0` / `1**` | **`1`** | **`0`** | **`1`** | **`SUBI dst, #1`** | $dst \leftarrow dst + 0\text{x0E}$ | $ZF, CF$ |
+| **`0` / `1**` | **`0`** | **`1`** | **`0`** | **`NOT dst`** | $dst \leftarrow \overline{dst}$ | $ZF$ |
+| **`0` / `1**` | **`0`** | **`1`** | **`1`** | **`SHR dst`** | $dst[3] \leftarrow 0, dst[i] \leftarrow dst[i+1], dst[0] \rightarrow CF$ | $ZF, CF$ |
+| **`0` / `1**` | **`1`** | **`1`** | **`0`** | **`RCR dst`** | $dst[3] \leftarrow CF, dst[i] \leftarrow dst[i+1], dst[0] \rightarrow CF$ | $ZF, CF$ |
+| **`0` / `1**` | **`1`** | **`1`** | **`1`** | **`CLR dst`** | $dst \leftarrow 0\text{x0}$ | $ZF \leftarrow 1, CF \leftarrow 0$ |
 
 #### Q3 Skip Control Escapes
 
-When $dst = \text{RegFLAGS}$ (`11_2`) in Q3, specialized skip hardware evaluates state without writeback:
+When $dst = \text{RegFLAGS}$ (`11_2`) in Q3 under `SBB` / `SUBI` binary patterns, specialized skip hardware evaluates state without writeback:
 
 | Binary Pattern | Mnemonic | Hardware Condition | Hardware Action |
 | --- | --- | --- | --- |
@@ -345,5 +351,5 @@ When $dst = \text{RegFLAGS}$ (`11_2`) in Q3, specialized skip hardware evaluates
 | **Q0: Memory Read** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Drive `RegC:RegD` $\rightarrow$ ADDR | Assert `~MEM_OE` $\rightarrow$ `BUS` | Switch `SYS_SEL` $\rightarrow$ `DST_SYS` | Assert `~WE[dst]` on `CLK` LOW |
 | **Q1: Reg-Reg ALU** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Drive `~OE1[src]` $\rightarrow$ `Latch_B` | Drive `~OE2[dst]` $\rightarrow$ `Latch_A` | Hold $C_g$ Compute State | Write `ALU_OUT` $\rightarrow$ `dst`, Sample Flags |
 | **Q2: Load Immediate** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Drive `OPERAND` $\rightarrow$ `BUS` | Assert `~WE[dst]` on `CLK` LOW | Reset Pipeline State | — |
-| **Q3: Immediate ALU** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Sample `#imm2` $\rightarrow$ ALU Input B | Drive `~OE2[dst]` $\rightarrow$ `Latch_A` | Compute Result | Write `ALU_OUT` $\rightarrow$ `dst`, Sample Flags |
+| **Q3: Immediate ALU** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Sample `#imm1` / `EXT` $\rightarrow$ ALU Input B | Drive `~OE2[dst]` $\rightarrow$ `Latch_A` | Compute Result | Write `ALU_OUT` $\rightarrow$ `dst`, Sample Flags |
 | **Hardware Interrupt** | Freeze `PC`, Force `NOP` | Fetch `NOP` Payload | Push $PCL_{\text{return}} \rightarrow$ STACK | Push $PCH_{\text{return}} \rightarrow$ STACK, Pulse `~IRQ_ACK` (Pin 06) | Clear $IE \leftarrow 0$ (Pin 09 LOW) | Load Vector `0xF2` $\rightarrow PCH:PCL$ |
