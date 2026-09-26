@@ -2,7 +2,7 @@
 
 **Architecture Type:** 4-Bit Cumulative Discrete NMOS Microprocessor
 
-**Addressing & Pointers:** 8-Bit Unified Address Space (`[RegC:RegD]` / `[PCH:PCL]`)
+**Addressing & Pointers:** 8-Bit Unified Address Space (`[RegC:RegD]` for Data / `[RegA:RegB]` for Control-Flow Target)
 
 **Fetch Mechanics:** Sequential Dual-Nibble Fetch (`OPCODE[3:0]`, `OPERAND[3:0]`)
 
@@ -44,9 +44,9 @@ $$\overline{\text{LATCH\_ENABLE}_n} = \text{\textasciitilde WE}_n \cdot \overlin
 
 ---
 
-## 2. Register Architecture & Q0 Dual-Bank Router
+## 2. Register Architecture & Three-Pointer Model
 
-The processing element contains two 4-slot register banks: **General Bank (`SYS = 0`)** and **System Bank (`SYS = 1`)**.
+The processor contains two 4-slot register banks: **General Bank (`SYS = 0`)** and **System Bank (`SYS = 1`)**.
 
 ```text
                         Q0 Operand Nibble (opr[3:0])
@@ -64,12 +64,12 @@ The processing element contains two 4-slot register banks: **General Bank (`SYS 
 
 Constructed using discrete 4-bit level-sensitive transparent latches.
 
-| Index (`[1:0]`) | Mnemonic | Name | Primary Function |
+| Index (`[1:0]`) | Mnemonic | Name | Primary Function & Pointer Role |
 | --- | --- | --- | --- |
-| **`00`** | **`RegA`** | Accumulator A | Primary ALU Input / Target |
-| **`01`** | **`RegB`** | Working Reg B | Secondary Operand Storage |
-| **`10`** | **`RegC`** | Working Reg C | High Pointer Byte (`PCH` / `ADDR_H`) |
-| **`11`** | **`RegD`** | Working Reg D | Low Pointer Byte (`PCL` / `ADDR_L`) |
+| **`00`** | **`RegA`** | Accumulator A | Primary ALU Target / High Code Pointer Byte (`PCH_target`) |
+| **`01`** | **`RegB`** | Working Reg B | Secondary Operand / Low Code Pointer Byte (`PCL_target`) |
+| **`10`** | **`RegC`** | Working Reg C | High Data Pointer Byte (`PCH_data` / `ADDR_H`) |
+| **`11`** | **`RegD`** | Working Reg D | Low Data Pointer Byte (`PCL_data` / `ADDR_L`) |
 
 ### Bank 1: System Control Bank (`SYS = 1`)
 
@@ -81,6 +81,27 @@ Constructed using Master-Slave Universal Bit Cells (UBC) to prevent race conditi
 | **`01`** | **`STACK`** | Hardware Stack Port | Stack Push / Pop | Auto `DEC SP` on read, `INC SP` on write |
 | **`10`** | **`SP`** | Stack Pointer | 4-Bit Stack Address Counter | Master-Slave Up/Down Counter |
 | **`11`** | **`RegFLAGS`** | Status Register | Machine Flags | Master-Slave Latch (`[CF, ZF, IE, UF]`) |
+
+---
+
+### The Three-Pointer Machine Model
+
+The architecture establishes three distinct pointers with clean functional isolation:
+
+```text
+       ┌─────────────────────────────────────────┐
+       │                NOD-4 CPU                │
+       ├─────────────────────────────────────────┤
+       │  RegA:RegB  ──►  Control-Flow Target    │
+       │  RegC:RegD  ──►  Data-Memory Pointer    │
+       │  SP         ──►  Hardware Call Stack    │
+       └─────────────────────────────────────────┘
+
+```
+
+1. **`RegA:RegB` (Control-Flow Pointer):** Holds the 8-bit destination vector for `CALL [RegA:RegB]` and jump targets. Executing a subroutine jump consumes `RegA:RegB` as the target address without disturbing `RegC:RegD`.
+2. **`RegC:RegD` (Data-Memory Pointer):** Drives the active 8-bit external address bus (`ADDR_H[3:0]`, `ADDR_L[3:0]`) whenever `MEM` is referenced in Q0. A subroutine can call helper routines via `RegA:RegB` while preserving its active data memory index in `RegC:RegD`.
+3. **`SP` (Hardware Stack Pointer):** Points to the return address stack page. With Q3 system math (`ADDI SP, #imm`), stack frames can be adjusted independently.
 
 ### Q0 Dual High-Bit Bank Matrix (`opr[3:2]`)
 
@@ -167,7 +188,7 @@ The standalone `~IRQ_ACK` pin is eliminated. Peripherals use the real-time state
 1. **Request Assertion:** An external peripheral pulls `~IRQ` (Pin 05) LOW.
 2. **Evaluation ($T_6$):** Central Control evaluates $\text{TRIGGER\_IRQ} = \overline{\text{\textasciitilde IRQ}} \cdot \text{IE}$.
 3. **Implicit ACK:** Central Control clears `IE` in `RegFLAGS` ($IE \leftarrow 0$), driving Pin 08 (`IE`) LOW. This HIGH-to-LOW transition signals the peripheral that its request is being serviced, prompting it to release `~IRQ` (Pin 05).
-4. **Vector Hijack & Return:** `PCH:PCL` is saved to `STACK`, execution jumps to vector `0xF2`, and executing `RET` later restores $IE \leftarrow 1$ (Pin 08 returns HIGH).
+4. **Vector Hijack & Return:** Return address `PCH:PCL` is saved to `STACK`, execution jumps to vector `0xF2`, and executing `RET` later restores $IE \leftarrow 1$ (Pin 08 returns HIGH).
 
 ---
 
@@ -207,8 +228,8 @@ Instruction execution utilizes two sequentially fetched 4-bit nibbles: `OPCODE[3
 | Binary Pattern | Mnemonic | Operation | Description |
 | --- | --- | --- | --- |
 | `OP=00_dd, OPR=00_ss` | **`MOV dst, src`** | $dst_{\text{Gen}} \leftarrow src_{\text{Gen}}$ | General register to General register transfer |
-| `OP=00_dd, OPR=01_ss` | **`LD dst, src`** | $dst_{\text{Gen}} \leftarrow \text{RAM}[src_{\text{Sys}}]$ | Memory / System read to General register |
-| `OP=00_dd, OPR=10_ss` | **`ST dst, src`** | $\text{RAM}[dst_{\text{Sys}}] \leftarrow src_{\text{Gen}}$ | General register write to Memory / System |
+| `OP=00_dd, OPR=01_ss` | **`LD dst, src`** | $dst_{\text{Gen}} \leftarrow \text{RAM}[src_{\text{Sys}}]$ | Memory / System read (`RegC:RegD` address) |
+| `OP=00_dd, OPR=10_ss` | **`ST dst, src`** | $\text{RAM}[dst_{\text{Sys}}] \leftarrow src_{\text{Gen}}$ | Memory / System write (`RegC:RegD` address) |
 | `OP=00_dd, OPR=11_ss` | **`MOV dst_sys, src_sys`** | $dst_{\text{Sys}} \leftarrow src_{\text{Sys}}$ | System register to System register transfer |
 
 #### 2. Q0 Diagonal Control Escapes ($dd == ss$)
@@ -219,7 +240,7 @@ When destination bits match source bits ($dst[1:0] == src[1:0]$) under specific 
 | --- | --- | --- | --- |
 | `00_00 0000` | **`NOP`** | No operation; advances pipeline | Resets at $T_6$ |
 | `00_01 0101` | **`RET`** | Pops `PCH:PCL` from hardware `STACK` | Resets at $T_4$ |
-| `00_10 1010` | **`CALL addr`** | Pushes `PCH:PCL` to `STACK`, loads branch target | Resets at $T_6$ |
+| `00_10 1010` | **`CALL [RegA:RegB]`** | Pushes `PCH:PCL` to `STACK`, loads `RegA:RegB` into `PCH:PCL` | Resets at $T_6$ |
 | `00_11 1111` | **`SWI`** | Forces software trap; jumps to vector `0xF2` | Resets at $T_6$ |
 
 ---
