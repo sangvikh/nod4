@@ -1,12 +1,12 @@
-# NOD-4 Microprocessor Architecture & System Specification (v14.4 Master Core)
+# NOD-4 Microprocessor Architecture & System Specification (v14.5 Master Core)
 
 **Architecture Type:** 4-Bit Cumulative Discrete NMOS Microprocessor
 
-**Addressing & Pointers:** 8-Bit Unified Address Space (`[RegC:RegD]` for Data / `[RegA:RegB]` for Control-Flow Target)
+**Addressing & Pointers:** 8-Bit Unified Address Space (`[RegC:RegD]` Data Pointer / `[RegA:RegB]` Control-Flow Target Pointer)
 
 **Fetch Mechanics:** Sequential Dual-Nibble Fetch (`OPCODE[3:0]`, `OPERAND[3:0]`)
 
-**Physical Hierarchy:** 31-Pin Passive Backplane Bus $\rightarrow$ Universal Base Cards (UBC) $\rightarrow$ Point-to-Point Control Harnesses $\rightarrow$ Central Control Board (CCB) & Daughtercards
+**Physical Hierarchy:** 32-Pin Master Backplane Bus $\rightarrow$ Universal Base Cards (UBC) $\rightarrow$ Control Harnesses $\rightarrow$ Central Control Board (CCB) & Daughtercards
 
 **Logic Standard:** Active-LOW discrete 2N7000 NMOS pass-transistors and depletion loads with $2.2\text{ k}\Omega$ pull-up resistors to $+5\text{V}$.
 
@@ -62,14 +62,14 @@ The processor contains two 4-slot register banks: **General Bank (`SYS = 0`)** a
 
 ### Bank 0: General Register Bank (`SYS = 0`)
 
-Constructed using discrete 4-bit level-sensitive transparent latches.
+Constructed using discrete 4-bit level-sensitive transparent latches. Registers $A/B$ and $C/D$ feature functional aliases reflecting their distinct pointer roles:
 
-| Index (`[1:0]`) | Mnemonic | Name | Primary Function & Pointer Role |
+| Index (`[1:0]`) | Assembly Mnemonic | Functional Alias | Primary Function & Pointer Role |
 | --- | --- | --- | --- |
-| **`00`** | **`RegA`** | Accumulator A | Primary ALU Target / High Code Pointer Byte (`PCH_target`) |
-| **`01`** | **`RegB`** | Working Reg B | Secondary Operand / Low Code Pointer Byte (`PCL_target`) |
-| **`10`** | **`RegC`** | Working Reg C | High Data Pointer Byte (`PCH_data` / `ADDR_H`) |
-| **`11`** | **`RegD`** | Working Reg D | Low Data Pointer Byte (`PCL_data` / `ADDR_L`) |
+| **`00`** | **`RegA`** | **`CPH`** (Control Pointer High) | Primary ALU Target / High Code Pointer Byte (`PCH_target`) |
+| **`01`** | **`RegB`** | **`CPL`** (Control Pointer Low) | Working Register / Low Code Pointer Byte (`PCL_target`) |
+| **`10`** | **`RegC`** | **`DPH`** (Data Pointer High) | High Data Memory Address Byte (`ADDR_H`) |
+| **`11`** | **`RegD`** | **`DPL`** (Data Pointer Low) | Low Data Memory Address Byte (`ADDR_L`) |
 
 ### Bank 1: System Control Bank (`SYS = 1`)
 
@@ -79,29 +79,29 @@ Constructed using Master-Slave Universal Bit Cells (UBC) to prevent race conditi
 | --- | --- | --- | --- | --- |
 | **`00`** | **`MEM`** | RAM Indirect Port | Indirect Data Access | Accesses external `RAM[RegC:RegD]` |
 | **`01`** | **`STACK`** | Hardware Stack Port | Stack Push / Pop | Auto `DEC SP` on read, `INC SP` on write |
-| **`10`** | **`SP`** | Stack Pointer | 4-Bit Stack Address Counter | Master-Slave Up/Down Counter |
+| **`10`** | **`SP`** | Stack Pointer | 4-Bit Stack Address Counter | Master-Slave Up/Down Counter (16-entry Return Stack) |
 | **`11`** | **`RegFLAGS`** | Status Register | Machine Flags | Master-Slave Latch (`[CF, ZF, IE, UF]`) |
 
 ---
 
 ### The Three-Pointer Machine Model
 
-The architecture establishes three distinct pointers with clean functional isolation:
+The architecture establishes three independent, persistent pointers with clean functional isolation:
 
 ```text
        ┌─────────────────────────────────────────┐
        │                NOD-4 CPU                │
        ├─────────────────────────────────────────┤
-       │  RegA:RegB  ──►  Control-Flow Target    │
-       │  RegC:RegD  ──►  Data-Memory Pointer    │
-       │  SP         ──►  Hardware Call Stack    │
+       │  RegA:RegB (CPH:CPL) ──► Control Target │
+       │  RegC:RegD (DPH:DPL) ──► Data Memory    │
+       │  SP                  ──► Hardware Stack │
        └─────────────────────────────────────────┘
 
 ```
 
-1. **`RegA:RegB` (Control-Flow Pointer):** Holds the 8-bit destination vector for `CALL [RegA:RegB]` and jump targets. Executing a subroutine jump consumes `RegA:RegB` as the target address without disturbing `RegC:RegD`.
-2. **`RegC:RegD` (Data-Memory Pointer):** Drives the active 8-bit external address bus (`ADDR_H[3:0]`, `ADDR_L[3:0]`) whenever `MEM` is referenced in Q0. A subroutine can call helper routines via `RegA:RegB` while preserving its active data memory index in `RegC:RegD`.
-3. **`SP` (Hardware Stack Pointer):** Points to the return address stack page. With Q3 system math (`ADDI SP, #imm`), stack frames can be adjusted independently.
+1. **`RegA:RegB` / `CPH:CPL` (Control-Flow Target Pointer):** Holds the persistent 8-bit destination address for `CALL [RegA:RegB]` and jump targets. Executing a subroutine call **uses** `RegA:RegB` as the target vector without altering its contents or disturbing `RegC:RegD`.
+2. **`RegC:RegD` / `DPH:DPL` (Data-Memory Pointer):** Drives the active 8-bit external address bus (`ADDR_H[3:0]`, `ADDR_L[3:0]`) whenever `MEM` is referenced in Q0. A subroutine can call helper routines via `RegA:RegB` while preserving its active data memory index in `RegC:RegD`.
+3. **`SP` (Hardware Stack Pointer):** Points to a dedicated internal 16-entry $\times$ 8-bit return address stack (completely independent from the 256 $\times$ 4-bit unified RAM). Executing `ADDI SP, #imm2` provides first-class, software-visible stack frame adjustment.
 
 ### Q0 Dual High-Bit Bank Matrix (`opr[3:2]`)
 
@@ -147,18 +147,18 @@ $$\text{Full Source Register Address} = [\text{opr[2]}, \text{opr[1:0]}]$$
 
 ---
 
-## 4. 31-Pin Master Backplane Pinout Mapping
+## 4. 32-Pin Master Backplane Pinout & Hardware IRQ Handshake
 
-The NOD-4 active backplane uses a 31-pin connector layout. All four machine flags (`CF`, `ZF`, `IE`, `UF`) are brought out directly to dedicated backplane pins.
+The NOD-4 active backplane uses a 32-pin connector layout. All four machine flags (`CF`, `ZF`, `IE`, `UF`) and the hardware interrupt acknowledge line (`~IRQ_ACK`) are brought out directly to dedicated pins.
 
 ```text
- POWER, CLK & CTRL (01-05)         4-BIT FLAG RAIL (06-09)          MEMORY & PARALLEL BUSES (10-31)
-[ 01-03 ] +5V, GND, CLK           [ 06 ] Carry Flag (CF)           [ 10-11 ] Memory OE / WE
-[ 04 ] HALT_STAT Execution        [ 07 ] Zero Flag (ZF)            [ 12-15 ] Data Bus (BUS[3:0])
-[ 05 ] ~IRQ Hardware Request      [ 08 ] Interrupt Enable (IE)     [ 16-19 ] Address High (ADDR_H[3:0])
-                                  [ 09 ] User Flag (UF)            [ 20-23 ] Address Low (ADDR_L[3:0])
-                                                                   [ 24-27 ] Opcode Rail (OPCODE[3:0])
-                                                                   [ 28-31 ] Operand Rail (OPERAND[3:0])
+ POWER, CLK & CTRL (01-06)         4-BIT FLAG RAIL (07-10)          MEMORY & PARALLEL BUSES (11-32)
+[ 01-03 ] +5V, GND, CLK           [ 07 ] Carry Flag (CF)           [ 11-12 ] Memory OE / WE
+[ 04 ] HALT_STAT Execution        [ 08 ] Zero Flag (ZF)            [ 13-16 ] Data Bus (BUS[3:0])
+[ 05 ] ~IRQ Hardware Request      [ 09 ] Interrupt Enable (IE)     [ 17-20 ] Address High (ADDR_H[3:0])
+[ 06 ] ~IRQ_ACK Hardware Acknowledge [ 10 ] User Flag (UF)         [ 21-24 ] Address Low (ADDR_L[3:0])
+                                                                   [ 25-28 ] Opcode Rail (OPCODE[3:0])
+                                                                   [ 29-32 ] Operand Rail (OPERAND[3:0])
 
 ```
 
@@ -169,26 +169,43 @@ The NOD-4 active backplane uses a 31-pin connector layout. All four machine flag
 | **03** | `CLK` | Master Clock | Input | Single-Phase Master Clock Drive |
 | **04** | `HALT_STAT` | Status | Output | CPU Run/Halt & Trap State Line |
 | **05** | `~IRQ` | Interrupt | Input | Active-LOW Hardware Interrupt Request Line |
-| **06** | `CF` | Flag Rail | Output | **Carry Flag** status output |
-| **07** | `ZF` | Flag Rail | Output | **Zero Flag** status output |
-| **08** | `IE` | Flag Rail | Output | **Interrupt Enable** status output (Implicit ACK) |
-| **09** | `UF` | Flag Rail | Output | **User Flag** status output (Direct LSB Branching) |
-| **10** | `~MEM_OE` | Memory Control | Output | Active-LOW Memory Read Output Enable |
-| **11** | `~MEM_WE` | Memory Control | Output | Active-LOW Memory Write Enable |
-| **12–15** | `BUS[3:0]` | Data Bus | Bidirectional | Parallel 4-Bit Bidirectional Data Bus |
-| **16–19** | `ADDR_H[3:0]` | High Address | Output | Upper 4-Bit Address Bus (`RegC` / `PCH`) |
-| **20–23** | `ADDR_L[3:0]` | Low Address | Output | Lower 4-Bit Address Bus (`RegD` / `PCL`) |
-| **24–27** | `OPCODE[3:0]` | Opcode Rail | Output | Pre-fetched Instruction Opcode Rail |
-| **28–31** | `OPERAND[3:0]` | Operand Rail | Output | Pre-fetched Instruction Operand Control Rail (`OPERAND[3]` = Pin 28) |
+| **06** | `~IRQ_ACK` | Interrupt | Output | Active-LOW Hardware Interrupt Acknowledge Strobe Pulse |
+| **07** | `CF` | Flag Rail | Output | **Carry Flag** status output |
+| **08** | `ZF` | Flag Rail | Output | **Zero Flag** status output |
+| **09** | `IE` | Flag Rail | Output | **Interrupt Enable** status output |
+| **10** | `UF` | Flag Rail | Output | **User Flag** status output (Direct LSB Branching) |
+| **11** | `~MEM_OE` | Memory Control | Output | Active-LOW Memory Read Output Enable |
+| **12** | `~MEM_WE` | Memory Control | Output | Active-LOW Memory Write Enable |
+| **13–16** | `BUS[3:0]` | Data Bus | Bidirectional | Parallel 4-Bit Bidirectional Data Bus |
+| **17–20** | `ADDR_H[3:0]` | High Address | Output | Upper 4-Bit Address Bus (`RegC` / `ADDR_H`) |
+| **21–24** | `ADDR_L[3:0]` | Low Address | Output | Lower 4-Bit Address Bus (`RegD` / `ADDR_L`) |
+| **25–28** | `OPCODE[3:0]` | Opcode Rail | Output | Pre-fetched Instruction Opcode Rail |
+| **29–32** | `OPERAND[3:0]` | Operand Rail | Output | Pre-fetched Instruction Operand Control Rail (`OPERAND[3]` = Pin 29) |
 
-### Hardware Interrupt Handshake (`IE` Implicit ACK Strobe)
+### Explicit Hardware Interrupt Handshake Protocol
 
-The standalone `~IRQ_ACK` pin is eliminated. Peripherals use the real-time state of the `IE` flag on **Pin 08** as an implicit hardware acknowledge strobe:
+Hardware interrupt servicing utilizes an active pulse on `~IRQ_ACK` (Pin 06), decoupled from the status of the `IE` flag (Pin 09):
+
+```text
+~IRQ      (Pin 05) ────┐                                   ┌───────────────────────
+                       └───────────────────────────────────┘ (Peripheral Releases)
+~IRQ_ACK  (Pin 06) ──────────────────┐             ┌───────────────────────────────
+                                     └─────────────┘ (1 T-step CPU Strobe)
+IE        (Pin 09) ───────────┐
+                              └────────────────────────────────────────────────────
+                                (IE cleared in RegFLAGS by CPU)
+
+```
 
 1. **Request Assertion:** An external peripheral pulls `~IRQ` (Pin 05) LOW.
 2. **Evaluation ($T_6$):** Central Control evaluates $\text{TRIGGER\_IRQ} = \overline{\text{\textasciitilde IRQ}} \cdot \text{IE}$.
-3. **Implicit ACK:** Central Control clears `IE` in `RegFLAGS` ($IE \leftarrow 0$), driving Pin 08 (`IE`) LOW. This HIGH-to-LOW transition signals the peripheral that its request is being serviced, prompting it to release `~IRQ` (Pin 05).
-4. **Vector Hijack & Return:** Return address `PCH:PCL` is saved to `STACK`, execution jumps to vector `0xF2`, and executing `RET` later restores $IE \leftarrow 1$ (Pin 08 returns HIGH).
+3. **Acknowledge Pulse & State Update ($T_4 \dots T_5$):**
+* Central Control drives a 1 T-step active-LOW pulse on `~IRQ_ACK` (Pin 06) to indicate CPU acceptance.
+* Simultaneously, Central Control clears `IE` in `RegFLAGS` ($IE \leftarrow 0$), driving Pin 09 LOW to prevent nested interrupts.
+
+
+4. **Peripheral Release:** The active-LOW pulse on `~IRQ_ACK` signals the peripheral to immediately release `~IRQ` (Pin 05).
+5. **Vector Hijack & Return:** Return address `PCH:PCL` is saved to `STACK`, execution jumps to vector `0xF2`, and executing `RET` later restores $IE \leftarrow 1$ (Pin 09 returns HIGH).
 
 ---
 
@@ -201,9 +218,9 @@ Instruction execution utilizes two sequentially fetched 4-bit nibbles: `OPCODE[3
      ┌───────┬─────────┬─────────┬─────────┐     ┌───────────┬───────────┬───────────────┐
      │  IMM  │ ALU_EN  │  dst1   │  dst0   │     │ OPERAND[3]│ OPERAND[2]│ OPERAND[1:0]  │
      └───────┴─────────┴─────────┴─────────┘     └───────────┴───────────┴───────────────┘
-     ◄────── OP[3:2] ─► ◄── dst[1:0] ─────►        SYS Select   OP / MODE    #imm Payload /
-        (Quadrant Select)   (ALWAYS HERE)          (0: General   (0: ADD/ADC   Unary Sub-Opcode
-                                                    1: System)    1: SUB/Unary)
+     ◄────── OP[3:2] ─► ◄── dst[1:0] ─────►        SYS Select   OP / MODE    Payload / Mode
+        (Quadrant Select)   (ALWAYS HERE)          (0: General   (0: ADD/ADC  (#imm2 payload or
+                                                    1: System)    1: SUB/Unary) Unary Sub-Opcode)
 
 ```
 
@@ -214,7 +231,7 @@ Instruction execution utilizes two sequentially fetched 4-bit nibbles: `OPCODE[3
 | **Q0** | `00` | Data Moves & Control Escapes | Dual-bank register/memory moves (`opr[3:2]`). Diagonal opcodes ($dd == ss$) decode control escapes (`CALL`, `RET`, `NOP`, `SWI`). |
 | **Q1** | `01` | Reg-to-Reg Binary ALU | 4-function binary ALU (`ADD`, `SUB`, `XOR`, `AND`) targeting General Bank registers (`RegA`–`RegD`). |
 | **Q2** | `10` | Load Immediate (`LDI`) | Drives 4-bit literal `#imm` payload directly from `OPERAND[3:0]` onto `BUS[3:0]` to target `dst[1:0]`. |
-| **Q3** | `11` | Immediate ALU, Unary & Shifts | System/General 2-bit immediate math (`ADDI`/`SUBI`), multi-nibble carry propagation (`ADC`/`SBB`), and unary matrix (`NOT`/`SHR`/`RCR`/`CLR`). |
+| **Q3** | `11` | Immediate ALU, Unary & Shifts | System/General 2-bit immediate math (`ADDI`/`SUBI` with `#imm2`), multi-nibble carry propagation (`ADC`/`SBB`), and unary matrix (`NOT`/`SHR`/`RCR`/`CLR`). |
 
 ---
 
@@ -234,7 +251,7 @@ Instruction execution utilizes two sequentially fetched 4-bit nibbles: `OPCODE[3
 
 #### 2. Q0 Diagonal Control Escapes ($dd == ss$)
 
-When destination bits match source bits ($dst[1:0] == src[1:0]$) under specific high-bit configurations, the hardware triggers control escapes:
+When destination bits match source bits ($dst[1:0] == src[1:0]$) under specific high-bit configurations, hardware triggers control escapes:
 
 | Binary Pattern | Mnemonic | Hardware Action | Execution Cycle |
 | --- | --- | --- | --- |
@@ -247,7 +264,7 @@ When destination bits match source bits ($dst[1:0] == src[1:0]$) under specific 
 
 ### Quadrant 1: Register-to-Register Binary ALU (`OPCODE = 01_dd`)
 
-Both operands reside in registers. Target destination (`dd`) is locked to Bank 0 (General Bank: `RegA`–`RegD`).
+Both operands reside in registers. Target destination ($dd$) is locked to Bank 0 (General Bank: `RegA`–`RegD`).
 
 * **`OPCODE[3:0]`:** `[0, 1, dst1, dst0]`
 * **`OPERAND[3:0]`:** `[alu_op1, alu_op0, src1, src0]`
@@ -263,7 +280,7 @@ Both operands reside in registers. Target destination (`dd`) is locked to Bank 0
 
 ### Quadrant 2: Load Immediate (`OPCODE = 10_dd`)
 
-Loads a 4-bit literal value directly into target register $dst[1:0]$.
+Loads a 4-bit literal value (`#imm[3:0]`, `#0..15`) directly into target register $dst[1:0]$.
 
 * **`OPCODE[3:0]`:** `[1, 0, dst1, dst0]`
 * **`OPERAND[3:0]`:** Literal 4-Bit Data (`#imm[3:0]`)
@@ -277,6 +294,8 @@ Loads a 4-bit literal value directly into target register $dst[1:0]$.
 ### Quadrant 3: Immediate ALU, Carry Propagate & Unary/Shift Matrix (`OPCODE = 11_dd`)
 
 Bit `OPERAND[3]` selects target bank (`SYS`). Bit `OPERAND[2]` switches between Immediate Addition / Carry Propagation (`MODE = 0`) and Subtraction / Unary / Shift Matrix (`MODE = 1`). `OPCODE[1:0]` strictly specifies the target register ($dst$).
+
+In Q3 immediate modes, the payload is a **2-bit immediate literal** (`#imm2`, range `#0..3`) encoded in `opr[1:0]`.
 
 ```text
                       OPERAND[3:0] DECODE TREE (Q3)
@@ -297,11 +316,11 @@ OPR[2]=0    OPR[2]=1                                OPR[2]=0    OPR[2]=1
 | `opr[3]` (`SYS`) | `opr[2]` (`MODE`) | `opr[1:0]` | Mnemonic | Hardware Action | Flags |
 | --- | --- | --- | --- | --- | --- |
 | **`0`** | **`0`** | **`00_2`** | **`ADC Gen`** | $dst_{\text{Gen}} \leftarrow dst + 0 + CF$ | $ZF, CF$ |
-| **`0`** | **`0`** | `#imm[1:0]` | **`ADDI Gen, #imm`** | $dst_{\text{Gen}} \leftarrow dst + \#imm$ | $ZF, CF$ |
+| **`0`** | **`0`** | `#imm2` | **`ADDI Gen, #imm2`** | $dst_{\text{Gen}} \leftarrow dst + \#imm2$ ($#0..3$) | $ZF, CF$ |
 | **`0`** | **`1`** | **`00_2`** | **`SBB Gen`** | $dst_{\text{Gen}} \leftarrow dst + 0x0F + CF$ | $ZF, CF$ |
-| **`0`** | **`1`** | `#imm[1:0]` | **`SUBI Gen, #imm`** | $dst_{\text{Gen}} \leftarrow dst + \overline{\#imm} + 1$ | $ZF, CF$ |
+| **`0`** | **`1`** | `#imm2` | **`SUBI Gen, #imm2`** | $dst_{\text{Gen}} \leftarrow dst + \overline{\#imm2} + 1$ ($#0..3$) | $ZF, CF$ |
 | **`1`** | **`0`** | **`00_2`** | **`ADC Sys`** | $dst_{\text{Sys}} \leftarrow dst + 0 + CF$ | $ZF, CF$ |
-| **`1`** | **`0`** | `#imm[1:0]` | **`ADDI Sys, #imm`** | $dst_{\text{Sys}} \leftarrow dst + \#imm$ *(e.g., `ADDI SP, #1`)* | $ZF, CF$ |
+| **`1`** | **`0`** | `#imm2` | **`ADDI Sys, #imm2`** | $dst_{\text{Sys}} \leftarrow dst + \#imm2$ *(e.g., `ADDI SP, #1`)* | $ZF, CF$ |
 | **`1`** | **`1`** | **`00_2`** | **`NOT dst`** | $dst \leftarrow \overline{dst}$ | $ZF$ |
 | **`1`** | **`1`** | **`01_2`** | **`SHR dst`** | $dst[3] \leftarrow 0, dst[i] \leftarrow dst[i+1], dst[0] \rightarrow CF$ | $ZF, CF$ |
 | **`1`** | **`1`** | **`10_2`** | **`RCR dst`** | $dst[3] \leftarrow CF, dst[i] \leftarrow dst[i+1], dst[0] \rightarrow CF$ | $ZF, CF$ |
@@ -326,5 +345,5 @@ When $dst = \text{RegFLAGS}$ (`11_2`) in Q3, specialized skip hardware evaluates
 | **Q0: Memory Read** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Drive `RegC:RegD` $\rightarrow$ ADDR | Assert `~MEM_OE` $\rightarrow$ `BUS` | Switch `SYS_SEL` $\rightarrow$ `DST_SYS` | Assert `~WE[dst]` on `CLK` LOW |
 | **Q1: Reg-Reg ALU** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Drive `~OE1[src]` $\rightarrow$ `Latch_B` | Drive `~OE2[dst]` $\rightarrow$ `Latch_A` | Hold $C_g$ Compute State | Write `ALU_OUT` $\rightarrow$ `dst`, Sample Flags |
 | **Q2: Load Immediate** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Drive `OPERAND` $\rightarrow$ `BUS` | Assert `~WE[dst]` on `CLK` LOW | Reset Pipeline State | — |
-| **Q3: Immediate ALU** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Sample `#imm` $\rightarrow$ ALU Input B | Drive `~OE2[dst]` $\rightarrow$ `Latch_A` | Compute Result | Write `ALU_OUT` $\rightarrow$ `dst`, Sample Flags |
-| **Hardware Interrupt** | Freeze `PC`, Force `NOP` | Fetch `NOP` Payload | Push $PCL_{\text{return}} \rightarrow$ STACK | Push $PCH_{\text{return}} \rightarrow$ STACK | Clear $IE \leftarrow 0$ (Pin 08 ACK) | Load Vector `0xF2` $\rightarrow PCH:PCL$ |
+| **Q3: Immediate ALU** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Sample `#imm2` $\rightarrow$ ALU Input B | Drive `~OE2[dst]` $\rightarrow$ `Latch_A` | Compute Result | Write `ALU_OUT` $\rightarrow$ `dst`, Sample Flags |
+| **Hardware Interrupt** | Freeze `PC`, Force `NOP` | Fetch `NOP` Payload | Push $PCL_{\text{return}} \rightarrow$ STACK | Push $PCH_{\text{return}} \rightarrow$ STACK, Pulse `~IRQ_ACK` (Pin 06) | Clear $IE \leftarrow 0$ (Pin 09 LOW) | Load Vector `0xF2` $\rightarrow PCH:PCL$ |
