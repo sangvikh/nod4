@@ -1,7 +1,3 @@
-Here is the fully updated **NOD-4 Microprocessor Architecture & System Specification (v14.4 Master Core)** document, incorporating the 31-pin backplane layout, all 4 flags on the backplane, contiguous `OPERAND[3:0]` routing, and the `IE` implicit ACK interrupt mechanism.
-
----
-
 # NOD-4 Microprocessor Architecture & System Specification (v14.4 Master Core)
 
 **Architecture Type:** 4-Bit Cumulative Discrete NMOS Microprocessor
