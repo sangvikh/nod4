@@ -294,17 +294,27 @@ The two high bits of `OPERAND` (`cc = opr[3:2]`) act as a 2-bit sub-opcode selec
 
 ### Quadrant 1: Register-to-Register Binary ALU (`OPCODE = 01_dd`)
 
-Both operands reside in registers. Target destination ($dd$) is locked to Bank 0 (General Bank: `RegA`–`RegD`).
+Quadrant 1 operations configure the hardware ALU using a 2-bit control line `alu_op[1:0] = [carry_kill, inv_b]`.
 
-* **`OPCODE[3:0]`:** `[0, 1, dst1, dst0]`
-* **`OPERAND[3:0]`:** `[alu_op1, alu_op0, src1, src0]`
+```text
+                      ALU CONTROL LINE MAPPING
+           alu_op[1] ──────────────────► carry_kill
+           alu_op[0] ──────────────────► inv_b (also forces Cin ◄─ ~Cin)
 
-| `alu_op[1:0]` | Mnemonic | Logic / Arithmetic Equation | Flags Affected |
-| --- | --- | --- | --- |
-| **`00`** | **`ADD dst, src`** | $dst \leftarrow dst + src + CF$ | $ZF, CF$ |
-| **`01`** | **`SUB dst, src`** | $dst \leftarrow dst + \overline{src} + CF$ | $ZF, CF$ |
-| **`10`** | **`XOR dst, src`** | $dst \leftarrow dst \oplus src$ | $ZF$ ($CF \leftarrow 0$) |
-| **`11`** | **`AND dst, src`** | $dst \leftarrow dst \land src$ | $ZF$ ($CF \leftarrow 0$) |
+```
+
+#### Ripple-Carry Hardware Mechanics
+
+* **Input B Inversion (`inv_b`):** When `inv_b = 1`, input $B$ is bitwise inverted ($\overline{B}$), and the incoming carry line is inverted ($C_{in} \leftarrow \overline{C_{in}}$).
+* **Carry Suppression (`carry_kill`):** When `carry_kill = 1`, carry propagation between adder stages is disabled, isolating individual bit-slice calculations.
+* **AND Tap Extraction (`11`):** In `11` mode, carry is killed (`carry_kill = 1`), `inv_b` is forced to `0`, and the ALU multiplexer taps directly into the intermediate AND gates of the ripple-carry adder stages.
+
+| `alu_op[1:0]` | Control Bits `[carry_kill, inv_b]` | Mnemonic | Hardware Logic / Arithmetic Equation | Flags |
+| --- | --- | --- | --- | --- |
+| **`00`** | `[0, 0]` | **`ADD dst, src`** | $dst \leftarrow A + B + C_{in}$ | $ZF, CF$ |
+| **`01`** | `[0, 1]` | **`SUB dst, src`** | $dst \leftarrow A + \overline{B} + \overline{C_{in}}$ | $ZF, CF$ |
+| **`10`** | `[1, 0]` | **`XOR dst, src`** | $dst \leftarrow A \oplus B$ *(Carry killed)* | $ZF$, $CF \leftarrow 0$ |
+| **`11`** | `[1, 0]` *(Tap Mode)* | **`AND dst, src`** | $dst \leftarrow A \land B$ *(Tapped from adder AND gates)* | $ZF$, $CF \leftarrow 0$ |
 
 ---
 
@@ -323,34 +333,56 @@ Loads a 4-bit literal value (`#imm[3:0]`, `#0..15`) directly into target registe
 
 ### Quadrant 3: Immediate ALU, Carry Propagate & Unary/Shift Matrix (`OPCODE = 11_dd`)
 
-Bit `opr[3]` selects target bank (`SYS`), bit `opr[1]` acts as the `EXT` mode switch, and `OPCODE[1:0]` strictly specifies the target register ($dst$).
-
-Because `opr[3]` (`SYS`) remains active across the **entire quadrant**, all arithmetic and unary operations target both **General** (`SYS = 0`) and **System** (`SYS = 1`) banks with 100% orthogonality.
+In Quadrant 3, the `EXT` mode bit (`opr[1]`) determines whether execution uses the arithmetic path or routes to dedicated unary/shift multiplexers.
 
 ```text
                         Q3 OPERAND NIBBLE DECODING (opr[3:0])
   ┌──────────────┬──────────────┬──────────────┬──────────────┐
   │    opr[3]    │    opr[2]    │    opr[1]    │    opr[0]    │
   ├──────────────┼──────────────┼──────────────┼──────────────┤
-  │   SYS_SEL    │  OP / SUBOP  │   EXT MODE   │  IMM1 / SUBOP│
-  │ (0: General) │ (0: ADD/NOT) │ (0: Arith)   │   (0: #0)    │
-  │ (1: System)  │ (1: SUB/RCR) │ (1: Unary)   │   (1: #1)    │
+  │   SYS_SEL    │  Arith Op    │   EXT MODE   │    inv_b /   │
+  │ (0: General) │ (0: ADD/ADC) │ (0: Arith)   │  SubOp Bit   │
+  │ (1: System)  │ (1: SUB/SBB) │ (1: Unary)   │   (0: #0)    │
+  │              │              │              │   (1: #1)    │
   └──────────────┴──────────────┴──────────────┴──────────────┘
 
 ```
 
+#### 1. Multi-Nibble Carry Routing Mechanics (`EXT = 0`)
+
+When operating in **Arithmetic Mode (`EXT = 0`)**, bit `opr[0]` acts as a dual-function control: it selects between immediate payload values (`#0` vs. `#1`) and toggles the carry-in source ($C_{in}$):
+
+* **Carry Propagation Mode (`opr[0] = 0` / Immediate `#0`):**
+* **$B$-Bus Drive:** Sets $B = 0\text{x0}$ (for ADD) or $B = 0\text{xF}$ (for SUB).
+* **$C_{in}$ Source Gate:** The control logic opens a pass-gate routing the **Carry Flag directly into Carry-In** ($C_{in} \leftarrow CF$).
+* **Result:** Performs $dst \leftarrow dst + 0 + CF$ (`ADC`) or $dst \leftarrow dst + 0\text{xF} + CF$ (`SBB`), allowing clean 8-bit, 12-bit, or 16-bit chained arithmetic across multiple 4-bit nibble cycles.
+
+
+* **Fixed Immediate Mode (`opr[0] = 1` / Immediate `#1`):**
+* **$B$-Bus Drive:** Sets `inv_b = 1` ($B = 0\text{x1}$ for ADD, $B = 0\text{xE}$ for SUB).
+* **$C_{in}$ Source Gate:** $C_{in}$ is derived statically through `inv_b` inversion ($C_{in} \leftarrow \overline{C_{in}}$), executing direct increment (`ADDI #1`) or decrement (`SUBI #1`) without inheriting prior Carry Flag states.
+
+
+
+#### 2. Unary & Clear Modes (`EXT = 1`)
+
+* **Shift / Invert Mode (`opr[2:0] = 010`, `011`, `100`):** Bypasses the binary adder to engage dedicated pass-gate shift networks (`NOT`, `SHR`, `RCR`).
+* **Output Disable Clear Mode (`CLR`, `opr[2:0] = 111`):** Disables all ALU output pass-transistors, disconnecting the ALU from the internal bus. Passive $2.2\text{ k}\Omega$ pull-down/default logic forces `0x0` onto target register inputs while asserting $ZF \leftarrow 1$ and $CF \leftarrow 0$.
+
+---
+
 #### Master Q3 Decoding Table
 
-| `opr[3]` (`SYS`) | `opr[2]` | `opr[1]` (`EXT`) | `opr[0]` | Mnemonic | Hardware Action | Flags |
-| --- | --- | --- | --- | --- | --- | --- |
-| **`0` / `1**` | **`0`** | **`0`** | **`0`** | **`ADC dst`** | $dst \leftarrow dst + 0 + CF$ | $ZF, CF$ |
-| **`0` / `1**` | **`0`** | **`0`** | **`1`** | **`ADDI dst, #1`** | $dst \leftarrow dst + 1$ | $ZF, CF$ |
-| **`0` / `1**` | **`1`** | **`0`** | **`0`** | **`SBB dst`** | $dst \leftarrow dst + 0\text{x0F} + CF$ | $ZF, CF$ |
-| **`0` / `1**` | **`1`** | **`0`** | **`1`** | **`SUBI dst, #1`** | $dst \leftarrow dst + 0\text{x0E}$ | $ZF, CF$ |
-| **`0` / `1**` | **`0`** | **`1`** | **`0`** | **`NOT dst`** | $dst \leftarrow \overline{dst}$ | $ZF$ |
-| **`0` / `1**` | **`0`** | **`1`** | **`1`** | **`SHR dst`** | $dst[3] \leftarrow 0, dst[i] \leftarrow dst[i+1], dst[0] \rightarrow CF$ | $ZF, CF$ |
-| **`0` / `1**` | **`1`** | **`1`** | **`0`** | **`RCR dst`** | $dst[3] \leftarrow CF, dst[i] \leftarrow dst[i+1], dst[0] \rightarrow CF$ | $ZF, CF$ |
-| **`0` / `1**` | **`1`** | **`1`** | **`1`** | **`CLR dst`** | $dst \leftarrow 0\text{x0}$ | $ZF \leftarrow 1, CF \leftarrow 0$ |
+| `opr[3]` (`SYS`) | `opr[2]` | `opr[1]` (`EXT`) | `opr[0]` | Mnemonic | $C_{in}$ Source & $B$-Bus State | Hardware Logic | Flags |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **`0` / `1**` | `0` | **`0`** | `0` | **`ADC dst`** | **$C_{in} \leftarrow CF$**, $B = 0\text{x0}$ | $dst \leftarrow dst + 0 + CF$ | $ZF, CF$ |
+| **`0` / `1**` | `0` | **`0`** | `1` | **`ADDI dst, #1`** | $C_{in}$ static (`inv_b = 1`), $B = 0\text{x1}$ | $dst \leftarrow dst + 1$ | $ZF, CF$ |
+| **`0` / `1**` | `1` | **`0`** | `0` | **`SBB dst`** | **$C_{in} \leftarrow CF$**, $B = 0\text{xF}$ | $dst \leftarrow dst + 0\text{xF} + CF$ | $ZF, CF$ |
+| **`0` / `1**` | `1` | **`0`** | `1` | **`SUBI dst, #1`** | $C_{in}$ static (`inv_b = 1`), $B = 0\text{xE}$ | $dst \leftarrow dst + 0\text{xE}$ | $ZF, CF$ |
+| **`0` / `1**` | `0` | **`1`** | `0` | **`NOT dst`** | Unary Pass Gate | $dst \leftarrow \overline{dst}$ | $ZF$ |
+| **`0` / `1**` | `0` | **`1`** | `1` | **`SHR dst`** | Shift Logic ($0 \rightarrow dst[3]$) | $dst[0] \rightarrow CF$ | $ZF, CF$ |
+| **`0` / `1**` | `1` | **`1`** | `0` | **`RCR dst`** | Shift Logic ($CF \rightarrow dst[3]$) | $dst[0] \rightarrow CF$ | $ZF, CF$ |
+| **`0` / `1**` | `1` | **`1`** | `1` | **`CLR dst`** | ALU Drivers Off | $dst \leftarrow 0\text{x0}$ | $ZF \leftarrow 1, CF \leftarrow 0$ |
 
 ---
 
