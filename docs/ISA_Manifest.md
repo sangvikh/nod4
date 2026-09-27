@@ -17,14 +17,14 @@
 The NOD-4 operates on a two-phase micro-step sequence ($T_1 \dots T_6$) driven by the falling edge of the master clock (`CLK`).
 
 ```text
-                PHASE 1: SETUP & DRIVE               PHASE 2: LATCH WINDOW
-CLK          ────────┐                             ┌───────────────────────┐
-                     └─────────────────────────────┘                       └───────
-~T[n]        ────────────────┐ (Timestep)
-                             └─────────────────────────────────────────────────────
-BUS[3:0]     ═══════════<     STABLE DATA WINDOW     >═════════════════════════════
-~WE[n]       ────────┐ (Driven full T-step)
-                     └─────────────────────────────────────────────────────────────
+                PHASE 1: SETUP & DRIVE                PHASE 2: LATCH WINDOW
+CLK         ────────┐                             ┌───────────────────────┐
+                    └─────────────────────────────┘                       └───────
+~T[n]       ────────────────┐ (Timestep)
+                    └─────────────────────────────────────────────────────
+BUS[3:0]    ═══════════<     STABLE DATA WINDOW     >═════════════════════════════
+~WE[n]      ────────┐ (Driven full T-step)
+                    └─────────────────────────────────────────────────────────────
 LATCH_ENABLE ──────────────────────────────────────┐ (~WE and CLK LOW)
                                                    └───────────────────────┘
                                                    ▲                       ▲
@@ -51,12 +51,12 @@ The processor contains two 4-slot register banks: **General Bank (`SYS = 0`)** a
 ```text
                         Q0 Operand Nibble (opr[3:0])
                     ┌───────────┬───────────┬───────────────┐
-                    │  opr[3]   │  opr[2]   │  opr[1:0]     │
+                    │   opr[3]  │   opr[2]  │   opr[1:0]    │
                     └───────────┴───────────┴───────────────┘
-                          │           │             │
-                          ▼           ▼             ▼
-                       DST SYS     SRC SYS    Register Index
-                       Select      Select        [1:0]
+                          │           │               │
+                          ▼           ▼               ▼
+                        DST SYS     SRC SYS     Register Index
+                        Select      Select          [1:0]
 
 ```
 
@@ -101,7 +101,7 @@ The architecture establishes three independent, persistent pointers with clean f
 
 1. **`RegA:RegB` / `CPH:CPL` (Control-Flow Target Pointer):** Holds the persistent 8-bit destination address for `CALL [RegA:RegB]` and jump targets. Executing a subroutine call **uses** `RegA:RegB` as the target vector without altering its contents or disturbing `RegC:RegD`.
 2. **`RegC:RegD` / `DPH:DPL` (Data-Memory Pointer):** Drives the active 8-bit external address bus (`ADDR_H[3:0]`, `ADDR_L[3:0]`) whenever `MEM` is referenced in Q0. A subroutine can call helper routines via `RegA:RegB` while preserving its active data memory index in `RegC:RegD`.
-3. **`SP` (Hardware Stack Pointer):** Points to a dedicated internal 16-entry $\times$ 8-bit return address stack (completely independent from the 256 $\times$ 4-bit unified RAM). Executing `ADDI SP, #1` or `SUBI SP, #1` provides first-class, software-visible stack frame adjustments.
+3. **`SP` (Hardware Stack Pointer):** Points to a dedicated internal 16-entry $\times$ 8-bit return address stack (completely independent from the 256 $\times$ 4-bit unified RAM). Executing `ADDI SP, #1` or `SUBI SP, #1` in Q3 provides first-class, software-visible stack frame adjustments.
 
 ### Q0 Dual High-Bit Bank Matrix (`opr[3:2]`)
 
@@ -129,12 +129,12 @@ $$\text{Full Source Register Address} = [\text{opr[2]}, \text{opr[1:0]}]$$
 ## 3. Status Register (`RegFLAGS`) & LSB Ejection Branching
 
 ```text
-                     Bit 3      Bit 2      Bit 1      Bit 0
-                   ┌──────────┬──────────┬──────────┬──────────┐
-                   │    CF    │    ZF    │    IE    │    UF    │
-                   └──────────┴──────────┴──────────┴──────────┘
-                     Carry      Zero     Interrupt   User Flag
-                      Flag      Flag      Enable    (LSB Eject)
+                    Bit 3      Bit 2      Bit 1      Bit 0
+                  ┌──────────┬──────────┬──────────┬──────────┐
+                  │    CF    │    ZF    │    IE    │    UF    │
+                  └──────────┴──────────┴──────────┴──────────┘
+                    Carry      Zero   Interrupt   User Flag
+                     Flag      Flag     Enable    (LSB Eject)
 
 ```
 
@@ -153,12 +153,12 @@ The NOD-4 active backplane uses a 32-pin connector layout. All four machine flag
 
 ```text
  POWER, CLK & CTRL (01-06)         4-BIT FLAG RAIL (07-10)          MEMORY & PARALLEL BUSES (11-32)
-[ 01-03 ] +5V, GND, CLK           [ 07 ] Carry Flag (CF)           [ 11-12 ] Memory OE / WE
-[ 04 ] HALT_STAT Execution        [ 08 ] Zero Flag (ZF)            [ 13-16 ] Data Bus (BUS[3:0])
-[ 05 ] ~IRQ Hardware Request      [ 09 ] Interrupt Enable (IE)     [ 17-20 ] Address High (ADDR_H[3:0])
-[ 06 ] ~IRQ_ACK Hardware Acknowledge [ 10 ] User Flag (UF)         [ 21-24 ] Address Low (ADDR_L[3:0])
-                                                                   [ 25-28 ] Opcode Rail (OPCODE[3:0])
-                                                                   [ 29-32 ] Operand Rail (OPERAND[3:0])
+[ 01-03 ] +5V, GND, CLK            [ 07 ] Carry Flag (CF)            [ 11-12 ] Memory OE / WE
+[ 04 ] HALT_STAT Execution         [ 08 ] Zero Flag (ZF)             [ 13-16 ] Data Bus (BUS[3:0])
+[ 05 ] ~IRQ Hardware Request       [ 09 ] Interrupt Enable (IE)      [ 17-20 ] Address High (ADDR_H[3:0])
+[ 06 ] ~IRQ_ACK Hardware Acknowledge [ 10 ] User Flag (UF)            [ 21-24 ] Address Low (ADDR_L[3:0])
+                                                                    [ 25-28 ] Opcode Rail (OPCODE[3:0])
+                                                                    [ 29-32 ] Operand Rail (OPERAND[3:0])
 
 ```
 
@@ -187,8 +187,8 @@ The NOD-4 active backplane uses a 32-pin connector layout. All four machine flag
 Hardware interrupt servicing utilizes an active pulse on `~IRQ_ACK` (Pin 06), decoupled from the status of the `IE` flag (Pin 09):
 
 ```text
-~IRQ      (Pin 05) ────┐                                   ┌───────────────────────
-                       └───────────────────────────────────┘ (Peripheral Releases)
+~IRQ      (Pin 05) ────┐                                    ┌───────────────────────
+                       └────────────────────────────────────┘ (Peripheral Releases)
 ~IRQ_ACK  (Pin 06) ──────────────────┐             ┌───────────────────────────────
                                      └─────────────┘ (1 T-step CPU Strobe)
 IE        (Pin 09) ───────────┐
@@ -218,9 +218,9 @@ Instruction execution utilizes two sequentially fetched 4-bit nibbles: `OPCODE[3
      ┌───────┬─────────┬─────────┬─────────┐     ┌───────────┬───────────┬───────────┬───────────┐
      │  IMM  │ ALU_EN  │  dst1   │  dst0   │     │ OPERAND[3]│ OPERAND[2]│ OPERAND[1]│ OPERAND[0]│
      └───────┴─────────┴─────────┴─────────┘     └───────────┴───────────┴───────────┴───────────┘
-     ◄────── OP[3:2] ─► ◄── dst[1:0] ─────►        SYS Select   ADD/SUB or   EXT Mode    IMM1 or
-        (Quadrant Select)   (ALWAYS HERE)         (0: General   Unary Op     (0: Arith   Unary SubOp
-                                                   1: System)   Selector      1: Unary)   (0:#0, 1:#1)
+     ◄────── OP[3:2] ─► ◄── dst[1:0] ─────►       SYS Select   ADD/SUB or   EXT Mode    IMM1 or
+        (Quadrant Select)   (ALWAYS HERE)        (0: General   Unary Op     (0: Arith   Unary SubOp
+                                                  1: System)   Selector      1: Unary)   (0:#0, 1:#1)
 
 ```
 
@@ -228,10 +228,10 @@ Instruction execution utilizes two sequentially fetched 4-bit nibbles: `OPCODE[3
 
 | Quadrant | Binary (`OP[3:2]`) | Class | Operational Description |
 | --- | --- | --- | --- |
-| **Q0** | `00` | Data Moves & Control Escapes | Dual-bank register/memory moves (`opr[3:2]`). Diagonal opcodes ($dd == ss$) decode control escapes (`CALL`, `RET`, `NOP`, `SWI`). |
+| **Q0** | `00` | Data Moves & Control Escapes | Dual-bank register/memory moves (`opr[3:2]`). Diagonal opcodes ($dd == ss$) decode control escapes (`CALL`, `RET`, `RETK`, `NOP`, `SWI`, Skips). |
 | **Q1** | `01` | Reg-to-Reg Binary ALU | 4-function binary ALU (`ADD`, `SUB`, `XOR`, `AND`) targeting General Bank registers (`RegA`–`RegD`). |
 | **Q2** | `10` | Load Immediate (`LDI`) | Drives 4-bit literal `#imm` payload directly from `OPERAND[3:0]` onto `BUS[3:0]` to target `dst[1:0]`. |
-| **Q3** | `11` | Immediate ALU, Unary & Shifts | System/General 1-bit immediate math (`ADDI`/`SUBI` with `#imm1`), multi-nibble carry propagation (`ADC`/`SBB`), and fully orthogonal dual-bank unary matrix (`NOT`/`SHR`/`RCR`/`CLR` using `opr[1]` as `EXT`). |
+| **Q3** | `11` | Immediate ALU, Unary & Shifts | System/General 1-bit immediate math (`ADDI`/`SUBI` with `#imm1`), multi-nibble carry propagation (`ADC`/`SBB`), and fully orthogonal dual-bank unary matrix (`NOT`/`SHR`/`RCR`/`CLR`). |
 
 ---
 
@@ -249,16 +249,46 @@ Instruction execution utilizes two sequentially fetched 4-bit nibbles: `OPCODE[3
 | `OP=00_dd, OPR=10_ss` | **`ST dst, src`** | $\text{RAM}[dst_{\text{Sys}}] \leftarrow src_{\text{Gen}}$ | Memory / System write (`RegC:RegD` address) |
 | `OP=00_dd, OPR=11_ss` | **`MOV dst_sys, src_sys`** | $dst_{\text{Sys}} \leftarrow src_{\text{Sys}}$ | System register to System register transfer |
 
+---
+
 #### 2. Q0 Diagonal Control Escapes ($dd == ss$)
 
-When destination bits match source bits ($dst[1:0] == src[1:0]$) under specific high-bit configurations, hardware triggers control escapes:
+When destination bits match source bits ($dst[1:0] == src[1:0]$), the standard register move engine is suppressed, and hardware routes execution to the Control Escape Matrix.
 
-| Binary Pattern | Mnemonic | Hardware Action | Execution Cycle |
-| --- | --- | --- | --- |
-| `00_00 0000` | **`NOP`** | No operation; advances pipeline | Resets at $T_6$ |
-| `00_01 0101` | **`RET`** | Pops `PCH:PCL` from hardware `STACK` | Resets at $T_4$ |
-| `00_10 1010` | **`CALL [RegA:RegB]`** | Pushes `PCH:PCL` to `STACK`, loads `RegA:RegB` into `PCH:PCL` | Resets at $T_6$ |
-| `00_11 1111` | **`SWI`** | Forces software trap; jumps to vector `0xF2` | Resets at $T_6$ |
+The two high bits of `OPERAND` (`cc = opr[3:2]`) act as a 2-bit sub-opcode selector across four functional control rows ($dd = 00 \dots 11$):
+
+```text
+               QUADRANT 0 DIAGONAL ESCAPE MATRIX (dd == ss)
+               
+   Destination (dd)   cc = 00         cc = 01         cc = 10         cc = 11
+   ────────────────   ─────────────   ─────────────   ─────────────   ─────────────
+   RegA (00)          NOP    (0x00)   SKP    (0x04)   GETPC  (0x08)   SRESET (0x0C)
+   RegB (01)          SZ     (0x11)   SNZ    (0x15)   SC     (0x19)   SNC    (0x1D)
+   RegC (10)          JU     (0x22)   RETK   (0x26)   RETI   (0x2A)   HALT   (0x2E)
+   RegD (11)          CALL   (0x33)   RET    (0x37)   PUSHPC (0x3B)   SWI    (0x3F)
+
+```
+
+##### Master Q0 Diagonal Decode Matrix
+
+| Binary (`OP_OPR`) | Hex Code | Mnemonic | Operational Description | Execution Cycles | Net $\Delta SP$ |
+| --- | --- | --- | --- | --- | --- |
+| `00_00 0000` | **`0x00`** | **`NOP`** | No Operation; advances pipeline | 2 ($T_1..T_2$) | 0 |
+| `00_00 0100` | **`0x04`** | **`SKP`** | Unconditional Skip; increments $PC \leftarrow PC + 2$ | 2 ($T_1..T_2$) | 0 |
+| `00_00 1000` | **`0x08`** | **`GETPC`** | Capture current $PC$ vector to $RegA:RegB$ | 2 ($T_1..T_2$) | 0 |
+| `00_00 1100` | **`0x0C`** | **`SRESET`** | Software Reset; asserts hardware system reset pulse | 2 ($T_1..T_2$) | 0 |
+| `00_01 0001` | **`0x11`** | **`SZ`** | Skip if Zero ($ZF = 1$); $PC \leftarrow PC + 2$ | 2 ($T_1..T_2$) | 0 |
+| `00_01 0101` | **`0x15`** | **`SNZ`** | Skip if Not Zero ($ZF = 0$); $PC \leftarrow PC + 2$ | 2 ($T_1..T_2$) | 0 |
+| `00_01 1001` | **`0x19`** | **`SC`** | Skip if Carry ($CF = 1$); $PC \leftarrow PC + 2$ | 2 ($T_1..T_2$) | 0 |
+| `00_01 1101` | **`0x1D`** | **`SNC`** | Skip if No Carry ($CF = 0$); $PC \leftarrow PC + 2$ | 2 ($T_1..T_2$) | 0 |
+| `00_10 0010` | **`0x22`** | **`JU`** | Jump Unconditional; $PC \leftarrow RegA:RegB$ | 4 ($T_0..T_3$) | 0 |
+| `00_10 0110` | **`0x26`** | **`RETK`** | Return & Keep Stack; reads $PCH:PCL$ to $PC$, restores $SP$ ($T_4..T_5$) | 6 ($T_0..T_5$) | **0** |
+| `00_10 1010` | **`0x2A`** | **`RETI`** | Return from Interrupt; pops $PCH:PCL$ to $PC$, sets $IE \leftarrow 1$ | 4 ($T_0..T_3$) | **$+2$** |
+| `00_10 1110` | **`0x2E`** | **`HALT`** | Assert `HALT_STAT`; freezes master clock | Infinite | 0 |
+| `00_11 0011` | **`0x33`** | **`CALL`** | Subroutine Call; pushes $PCH:PCL$ to `STACK`, $PC \leftarrow RegA:RegB$ | 6 ($T_0..T_5$) | **$-2$** |
+| `00_11 0111` | **`0x37`** | **`RET`** | Return from Subroutine; pops $PCH:PCL$ from `STACK` to $PC$ | 4 ($T_0..T_3$) | **$+2$** |
+| `00_11 1011` | **`0x3B`** | **`PUSHPC`** | Push Program Counter; pushes $PCH:PCL$ onto `STACK` | 4 ($T_0..T_3$) | **$-2$** |
+| `00_11 1111` | **`0x3F`** | **`SWI`** | Software Trap; pushes $PCH:PCL$ to `STACK`, vectors to `0xF2` | 6 ($T_0..T_5$) | **$-2$** |
 
 ---
 
@@ -298,7 +328,7 @@ Bit `opr[3]` selects target bank (`SYS`), bit `opr[1]` acts as the `EXT` mode sw
 Because `opr[3]` (`SYS`) remains active across the **entire quadrant**, all arithmetic and unary operations target both **General** (`SYS = 0`) and **System** (`SYS = 1`) banks with 100% orthogonality.
 
 ```text
-                      Q3 OPERAND NIBBLE DECODING (opr[3:0])
+                        Q3 OPERAND NIBBLE DECODING (opr[3:0])
   ┌──────────────┬──────────────┬──────────────┬──────────────┐
   │    opr[3]    │    opr[2]    │    opr[1]    │    opr[0]    │
   ├──────────────┼──────────────┼──────────────┼──────────────┤
@@ -308,16 +338,6 @@ Because `opr[3]` (`SYS`) remains active across the **entire quadrant**, all arit
   └──────────────┴──────────────┴──────────────┴──────────────┘
 
 ```
-
-#### 1. Arithmetic Mode (`opr[1] = 0` / `EXT = 0`)
-
-* `opr[2]` specifies operation: `0` = Addition family, `1` = Subtraction family.
-* `opr[0]` provides the 1-bit immediate (`IMM1`): `0` = `#0` (Carry propagation `ADC`/`SBB`), `1` = `#1` (`ADDI`/`SUBI`).
-
-#### 2. Unary / Shift Mode (`opr[1] = 1` / `EXT = 1`)
-
-* `opr[2]` and `opr[0]` act as a 2-bit sub-opcode selector: `00` = `NOT`, `01` = `SHR`, `10` = `RCR`, `11` = `CLR`.
-* Allows `SHR RegA` (General) and `SHR RegFLAGS` ($UF$ LSB ejection) to share identical decoding.
 
 #### Master Q3 Decoding Table
 
@@ -332,15 +352,6 @@ Because `opr[3]` (`SYS`) remains active across the **entire quadrant**, all arit
 | **`0` / `1**` | **`1`** | **`1`** | **`0`** | **`RCR dst`** | $dst[3] \leftarrow CF, dst[i] \leftarrow dst[i+1], dst[0] \rightarrow CF$ | $ZF, CF$ |
 | **`0` / `1**` | **`1`** | **`1`** | **`1`** | **`CLR dst`** | $dst \leftarrow 0\text{x0}$ | $ZF \leftarrow 1, CF \leftarrow 0$ |
 
-#### Q3 Skip Control Escapes
-
-When $dst = \text{RegFLAGS}$ (`11_2`) in Q3 under `SBB` / `SUBI` binary patterns, specialized skip hardware evaluates state without writeback:
-
-| Binary Pattern | Mnemonic | Hardware Condition | Hardware Action |
-| --- | --- | --- | --- |
-| `11_11 1101` | **`SC`** | Skip on Carry Set ($CF = 1$) | Auto-increments `PC` by extra +2 to skip next instruction |
-| `11_11 1110` | **`SNC`** | Skip on Carry Clear ($CF = 0$) | Auto-increments `PC` by extra +2 to skip next instruction |
-
 ---
 
 ## 6. Pipeline Timestep Matrix ($T_1 \dots T_6$)
@@ -349,6 +360,7 @@ When $dst = \text{RegFLAGS}$ (`11_2`) in Q3 under `SBB` / `SUBI` binary patterns
 | --- | --- | --- | --- | --- | --- | --- |
 | **Q0: Register Move** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Drive `opr[2]` $\rightarrow$ `SYS_SEL` | Assert `~OE1[src]` $\rightarrow$ `BUS` | Switch `SYS_SEL` $\rightarrow$ `opr[3]` | Assert `~WE[dst]` on `CLK` LOW |
 | **Q0: Memory Read** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Drive `RegC:RegD` $\rightarrow$ ADDR | Assert `~MEM_OE` $\rightarrow$ `BUS` | Switch `SYS_SEL` $\rightarrow$ `DST_SYS` | Assert `~WE[dst]` on `CLK` LOW |
+| **Q0: RETK (6-Cycle)** | Assert `SP` $\rightarrow$ ADDR | Read $PCL \rightarrow PC$, Auto-DEC $SP$ | Read $PCH \rightarrow PC$, Auto-DEC $SP$ | Assert `SP_INC` Pulse 1 | Assert `SP_INC` Pulse 2 | Restores $SP$, Reset Pipeline |
 | **Q1: Reg-Reg ALU** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Drive `~OE1[src]` $\rightarrow$ `Latch_B` | Drive `~OE2[dst]` $\rightarrow$ `Latch_A` | Hold $C_g$ Compute State | Write `ALU_OUT` $\rightarrow$ `dst`, Sample Flags |
 | **Q2: Load Immediate** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Drive `OPERAND` $\rightarrow$ `BUS` | Assert `~WE[dst]` on `CLK` LOW | Reset Pipeline State | — |
 | **Q3: Immediate ALU** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Sample `#imm1` / `EXT` $\rightarrow$ ALU Input B | Drive `~OE2[dst]` $\rightarrow$ `Latch_A` | Compute Result | Write `ALU_OUT` $\rightarrow$ `dst`, Sample Flags |
