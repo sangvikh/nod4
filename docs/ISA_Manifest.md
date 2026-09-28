@@ -102,10 +102,10 @@ Constructed using Master-Slave Universal Bit Cells (UBC) to prevent race conditi
 | Index (`[1:0]`) | Mnemonic | Name | Primary Function | Special Hardware Action |
 | --- | --- | --- | --- | --- |
 | **`00`** | **`MEM`** | RAM Indirect Port | Indirect Data Access | Accesses external `RAM[RegC:RegD]`<br> |
-| **`01`** | **`STACK`** | Hardware Stack Port | Stack Push / Pop | Auto `DEC SP` on read, `INC SP` on write
+| **`01`** | **`STACK`** | Hardware Stack Port | Stack Push / Pop | Automatic stack-pointer update on read/write
 
  |
-| **`10`** | **`SP`** | Stack Pointer | 4-Bit Stack Address Counter | Master-Slave Up/Down Counter (16-entry Return Stack)
+| **`10`** | **`SP`** | Stack Pointer | 4-Bit Stack Nibble Counter | Master-Slave/ripple Up/Down Counter (16-nibble Return Stack)
 
  |
 | **`11`** | **`RegFLAGS`** | Status Register | Machine Flags | Master-Slave Latch (`[CF, ZF, IE, UF]`)
@@ -137,7 +137,7 @@ The architecture establishes three independent, persistent pointers with clean f
 2. **`RegC:RegD` / `DPH:DPL` (Data-Memory Pointer):** Drives the active 8-bit external address bus (`ADDR_H[3:0]`, `ADDR_L[3:0]`) whenever `MEM` is referenced in Q0. A subroutine can call helper routines via `RegA:RegB` while preserving its active data memory index in `RegC:RegD`.
 
 
-3. **`SP` (Hardware Stack Pointer):** Points to a dedicated internal 16-entry $\times$ 8-bit **Ascending Empty (AE)** return address stack (completely independent from the 256 $\times$ 4-bit unified RAM). Executing `ADDI SP, #1` or `SUBI SP, #1` in Q3 provides software-visible stack frame adjustments.
+3. **`SP` (Hardware Stack Pointer):** Points to a dedicated internal 16-nibble **Ascending Empty (AE)** return stack (completely independent from the 256 $\times$ 4-bit unified RAM). Two stack nibbles hold one return address. Executing `ADDI SP, #1` or `SUBI SP, #1` in Q3 provides software-visible stack-frame adjustments.
 
 
 
@@ -308,7 +308,7 @@ IE        (Pin 09) ───────────┐
 4. **Peripheral Release:** The active-LOW pulse on `~IRQ_ACK` signals the peripheral to immediately release `~IRQ` (Pin 05).
 
 
-5. **Vector Hijack & Return:** Return address `PCH:PCL` is saved to `STACK`, execution jumps to vector `0xF2`, and executing `RET` or `RETI` restores $IE \leftarrow 1$ (Pin 09 returns HIGH).
+5. **Vector Hijack & Return:** Return address `PCH:PCL` is saved to `STACK`, execution jumps to vector `0xF2`, and executing `RETI` restores `IE ← 1` (Pin 09 returns HIGH). Ordinary `RET` preserves `IE`.
 
 
 
@@ -394,6 +394,39 @@ $$\text{ESCAPE\_EN} = \text{IS\_Q0} \cdot (dd_1 \odot ss_1) \cdot (dd_0 \odot ss
 
 $$\text{STD\_REG\_DEC\_ENABLE} = \text{IS\_Q0} \cdot \overline{\text{ESCAPE\_EN}}$$
 
+### Control-Flow Transfer Primitives
+
+Diagonal escapes compose a small set of fixed transfers. These are the
+authoritative architectural operations; individual escape instructions are
+combinations of them rather than unrelated special cases.
+
+| Primitive | Transfer |
+| --- | --- |
+| `PC_TO_STACK` | `PCH:PCL → STACK` |
+| `STACK_TO_PC` | `STACK → PCH:PCL` |
+| `TARGET_TO_PC` | `RegA:RegB → PCH:PCL` |
+| `PC_TO_TARGET` | `PCH:PCL → RegA:RegB` |
+| `PC_INC` | `PC ← PC + 2` |
+| `IE_SET` | `IE ← 1` |
+| `SP_RESTORE` | `SP ← SP + 2` |
+
+The paired control-pointer transfers are explicit: `JU` is `RegA:RegB →
+PCH:PCL`, while `GETPC` is the reverse transfer. The data pointer `RegC:RegD`
+is not implicitly involved in control-flow operations.
+
+The principal compositions are:
+
+```text
+JU     = TARGET_TO_PC
+GETPC  = PC_TO_TARGET
+CALL   = PC_TO_STACK + TARGET_TO_PC
+PUSHPC = PC_TO_STACK
+RET    = STACK_TO_PC
+RETI   = STACK_TO_PC + IE_SET
+RETK   = STACK_TO_PC + SP_RESTORE
+SWI    = PC_TO_STACK + VECTOR_TO_PC
+```
+
 ##### Direct Bitmapped Control Bit Allocations
 
 
@@ -451,15 +484,17 @@ Operations execute across time-step slots with standard micro-step resets ($T_2$
 
 
 
-The hardware return stack operates as **Ascending Empty (AE)**: $SP$ points to the next empty slot above valid data.
+The hardware return stack operates as **Ascending Empty (AE)**: `SP` points to the next empty nibble above valid data. It contains 16 nibbles, so it can hold eight return-address bytes, or four complete 8-bit return addresses. The stack wraps modulo 16 nibbles.
 
 * **PUSH (`PUSHPC`, `CALL`, `SWI`):** Writes $PCH/PCL \rightarrow \text{STACK}[SP]$, then increments $SP$ ($SP \leftarrow SP + 1$ per nibble $\Rightarrow +2$ total).
 
 
-* **POP (`RET`, `RETI`):** Decrements $SP$ ($SP \leftarrow SP - 1$ per nibble $\Rightarrow -2$ total), then reads $\text{STACK}[SP] \rightarrow PCH/PCL$.
+* **POP (`RET`, `RETI`):** Decrements `SP` once per nibble for two nibbles, then reads the resulting pair into `PCH:PCL`.
 
 
-* **Return & Keep Stack (`RETK`):** Uses the exact same shared POP sequence during $T_3, T_4$ ($SP--$, read stack into $PC$), and uses $T_5, T_6$ to increment $SP$ back up ($SP++, SP++$), restoring $SP$ to its original empty slot ($\text{Net } \Delta SP = 0$).
+* **Return & Keep Stack (`RETK`):** Performs the normal two-nibble pop, then increments `SP` twice during phase 2. Net stack-pointer change is zero.
+
+The same stack convention is used by ordinary `CALL` and hardware IRQ entry. `RET` preserves `IE`; `RETI` sets `IE` after restoring the PC.
 
 
 
@@ -709,3 +744,54 @@ When operating in **Arithmetic Mode (`EXT = 0`)**, bit `opr[0]` acts as a dual-f
 
  |
 | **Hardware Interrupt** | Freeze `PC`, Force `NOP` | Fetch `NOP` Payload | Push $PCL_{\text{return}} \rightarrow$ STACK | Push $PCH_{\text{return}} \rightarrow$ STACK, Pulse `~IRQ_ACK` (Pin 06) | Clear $IE \leftarrow 0$ (Pin 09 LOW) | Load Vector `0xF2` $\rightarrow PCH:PCL$<br> |
+
+---
+
+## 7. Authoritative Timing and Semantic Clarifications
+
+The following rules supersede any older per-instruction timing wording in
+this document.
+
+### Ordinary Instruction Templates
+
+Most ordinary instructions complete early:
+
+| Instruction class | Completion | Sequencer reset |
+| --- | --- | --- |
+| Q0 register and memory moves | `T2` | `T3` |
+| Q2 `LDI` | `T2` | `T3` |
+| Q1/Q3 ALU operations | `T4` writeback | `T5` |
+
+This includes general-register moves, `MEM` reads and writes, system-register
+moves, `MEM ↔ STACK` transfers, and `LDI`. The diagonal escape matrix below is
+the only class that composes longer primitive sequences.
+
+### Diagonal Escape Primitive Schedule
+
+All escapes fetch the opcode in `T1` and the operand in `T2`. The existing
+flags are already stable while the escape is fetched, so a conditional escape
+may evaluate its condition immediately after `T2`:
+
+| Escape | Phase 1 (`T3–T4`) | Phase 2 (`T5–T6`) | Reset |
+| --- | --- | --- | --- |
+| `NOP` | idle | idle | natural `T6` |
+| `SRESET` | — | — | `T2` |
+| `HALT` | — | — | `T2` / halt |
+| failed `SZ/SNZ/SC/SNC` | condition evaluation | — | `T2` |
+| `SKP` or successful conditional skip | `PC_INC` | — | `T4` |
+| `GETPC` | `PC_TO_TARGET` | — | `T4` |
+| `RET` | `STACK_TO_PC` | — | `T4` |
+| `RETI` | `STACK_TO_PC` | `IE_SET` | `T4` |
+| `RETK` | `STACK_TO_PC` | `SP_RESTORE` | natural `T6` |
+| `JU` | `TARGET_TO_PC` | — | `T4` |
+| `PUSHPC` | `PC_TO_STACK` | — | `T4` |
+| `CALL` | `PC_TO_STACK` | `TARGET_TO_PC` | natural `T6` |
+| `SWI` | `PC_TO_STACK` | vector-to-PC | natural `T6` |
+
+`JU` is specifically `RegA:RegB → PCH:PCL`; `GETPC` is specifically the
+reverse transfer. `RegC:RegD` is not implicitly involved in either operation.
+
+Failed conditional escapes may assert the existing `CYCLE_RESET` line at `T2`
+because `ZF` and `CF` belong to the preceding instruction and are already
+stable. The condition decision must be held long enough for the reset pulse to
+be recognized.
