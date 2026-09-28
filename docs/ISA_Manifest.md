@@ -1,4 +1,4 @@
-# NOD-4 Microprocessor Architecture & System Specification (v14.6 Master Core)
+# NOD-4 Microprocessor Architecture & System Specification (v15.0 Master Core — Bitmapped Escapes & AE Stack Edition)
 
 **Architecture Type:** 4-Bit Cumulative Discrete NMOS Microprocessor
 
@@ -101,7 +101,7 @@ The architecture establishes three independent, persistent pointers with clean f
 
 1. **`RegA:RegB` / `CPH:CPL` (Control-Flow Target Pointer):** Holds the persistent 8-bit destination address for `CALL [RegA:RegB]` and jump targets. Executing a subroutine call **uses** `RegA:RegB` as the target vector without altering its contents or disturbing `RegC:RegD`.
 2. **`RegC:RegD` / `DPH:DPL` (Data-Memory Pointer):** Drives the active 8-bit external address bus (`ADDR_H[3:0]`, `ADDR_L[3:0]`) whenever `MEM` is referenced in Q0. A subroutine can call helper routines via `RegA:RegB` while preserving its active data memory index in `RegC:RegD`.
-3. **`SP` (Hardware Stack Pointer):** Points to a dedicated internal 16-entry $\times$ 8-bit return address stack (completely independent from the 256 $\times$ 4-bit unified RAM). Executing `ADDI SP, #1` or `SUBI SP, #1` in Q3 provides first-class, software-visible stack frame adjustments.
+3. **`SP` (Hardware Stack Pointer):** Points to a dedicated internal 16-entry $\times$ 8-bit **Ascending Empty (AE)** return address stack (completely independent from the 256 $\times$ 4-bit unified RAM). Executing `ADDI SP, #1` or `SUBI SP, #1` in Q3 provides first-class, software-visible stack frame adjustments.
 
 ### Q0 Dual High-Bit Bank Matrix (`opr[3:2]`)
 
@@ -112,8 +112,8 @@ $$\text{Full Destination Register Address} = [\text{opr[3]}, \text{opr[1:0]}]$$
 $$\text{Full Source Register Address} = [\text{opr[2]}, \text{opr[1:0]}]$$
 
 * **Phase-Gated `SYS_SEL` Line:**
-* During **$T_3$ (Source Read):** Central Control Board asserts `opr[2]` onto internal `SYS_SEL` logic.
-* During **$T_5$ (Destination Write):** Central Control Board switches `SYS_SEL` to assert `opr[3]`.
+* During **$T_3$ / $T_4$ (Source Read):** Central Control Board asserts `opr[2]` onto internal `SYS_SEL` logic.
+* During **$T_5$ / $T_6$ (Destination Write):** Central Control Board switches `SYS_SEL` to assert `opr[3]`.
 
 
 
@@ -141,7 +141,7 @@ $$\text{Full Source Register Address} = [\text{opr[2]}, \text{opr[1:0]}]$$
 * **Bit 0 ($UF$ - User Flag):** Positioned at LSB to support zero-overhead conditional branching.
 * **2-Cycle Conditional Branch Mechanism:**
 1. Executing `SHR RegFLAGS` or `RCR RegFLAGS` ejects $UF$ directly out of Bit 0 into the Carry Flag ($CF$) in **1 cycle**.
-2. The following instruction executes **`SC`** (Skip on Carry) or **`SNC`** (Skip on No Carry) in Q3 to branch conditionally in **2 cycles** total, eliminating dedicated branch-steering logic.
+2. The following instruction executes **`SC`** (Skip on Carry) or **`SNC`** (Skip on No Carry) in Q0 escapes to branch conditionally in **2 cycles** total, eliminating dedicated branch-steering logic.
 
 
 
@@ -205,7 +205,7 @@ IE        (Pin 09) ───────────┐
 
 
 4. **Peripheral Release:** The active-LOW pulse on `~IRQ_ACK` signals the peripheral to immediately release `~IRQ` (Pin 05).
-5. **Vector Hijack & Return:** Return address `PCH:PCL` is saved to `STACK`, execution jumps to vector `0xF2`, and executing `RET` later restores $IE \leftarrow 1$ (Pin 09 returns HIGH).
+5. **Vector Hijack & Return:** Return address `PCH:PCL` is saved to `STACK`, execution jumps to vector `0xF2`, and executing `RET` or `RETI` restores $IE \leftarrow 1$ (Pin 09 returns HIGH).
 
 ---
 
@@ -228,7 +228,7 @@ Instruction execution utilizes two sequentially fetched 4-bit nibbles: `OPCODE[3
 
 | Quadrant | Binary (`OP[3:2]`) | Class | Operational Description |
 | --- | --- | --- | --- |
-| **Q0** | `00` | Data Moves & Control Escapes | Dual-bank register/memory moves (`opr[3:2]`). Diagonal opcodes ($dd == ss$) decode control escapes (`CALL`, `RET`, `RETK`, `NOP`, `SWI`, Skips). |
+| **Q0** | `00` | Data Moves & Control Escapes | Dual-bank register/memory moves (`opr[3:2]`). Diagonal opcodes ($dd == ss$) decode control escapes (`CALL`, `RET`, `RETK`, `NOP`, `SWI`, Skips) via bitmapped control primitives. |
 | **Q1** | `01` | Reg-to-Reg Binary ALU | 4-function binary ALU (`ADD`, `SUB`, `XOR`, `AND`) targeting General Bank registers (`RegA`–`RegD`). |
 | **Q2** | `10` | Load Immediate (`LDI`) | Drives 4-bit literal `#imm` payload directly from `OPERAND[3:0]` onto `BUS[3:0]` to target `dst[1:0]`. |
 | **Q3** | `11` | Immediate ALU, Unary & Shifts | System/General 1-bit immediate math (`ADDI`/`SUBI` with `#imm1`), multi-nibble carry propagation (`ADC`/`SBB`), and fully orthogonal dual-bank unary matrix (`NOT`/`SHR`/`RCR`/`CLR`). |
@@ -251,44 +251,135 @@ Instruction execution utilizes two sequentially fetched 4-bit nibbles: `OPCODE[3
 
 ---
 
-#### 2. Q0 Diagonal Control Escapes ($dd == ss$)
+#### 2. Q0 Diagonal Bitmapped Control Escapes ($dd == ss$)
 
-When destination bits match source bits ($dst[1:0] == src[1:0]$), the standard register move engine is suppressed, and hardware routes execution to the Control Escape Matrix.
+When destination register index matches source register index ($dst[1:0] == src[1:0]$ in $Q_0$), hardware completely suppresses standard register read/write enables (`DST_SYS` and `SRC_SYS` decoders are gated off). There is zero register collision.
 
-The two high bits of `OPERAND` (`cc = opr[3:2]`) act as a 2-bit sub-opcode selector across four functional control rows ($dd = 00 \dots 11$):
+Instead, the 4 active control bits—$dd[1:0]$ from `OPCODE[1:0]` and $cc[1:0]$ from `OPERAND[3:2]`—directly feed pass-gate control lines in a time-multiplexed, fixed 6-cycle ($T_1 \dots T_6$) control matrix.
+
+$$\text{ESCAPE\_EN} = \text{IS\_Q0} \cdot (dd_1 \odot ss_1) \cdot (dd_0 \odot ss_0)$$
+
+$$\text{STD\_REG\_DEC\_ENABLE} = \text{IS\_Q0} \cdot \overline{\text{ESCAPE\_EN}}$$
+
+##### Direct Bitmapped Control Bit Allocations
+
+$$\text{Control Vector} = \big[\, \underbrace{dd_1}_{\text{Stack Phase En}} \,,\, \underbrace{dd_0}_{\text{Phase 1 SubOp}} \,,\, \underbrace{cc_1}_{\text{Phase 2 Action / Flag Select}} \,,\, \underbrace{cc_0}_{\text{Target / Restore Select}} \,\big]$$
+
+* **`dd1` (`OPCODE[1]` — Stack Operation Enable):**
+* `0`: Non-Stack Control Operations (System Reset, Skips, PC Capture).
+* `1`: Stack Control Operations (`RET`, `RETK`, `RETI`, `HALT`, `JU`, `CALL`, `PUSHPC`, `SWI`).
+
+
+* **`dd0` (`OPCODE[0]` — Phase 1 Shared Sequence Selector):**
+* When $dd_1 = 0$: `0` = Simple / System Ops, `1` = Conditional Flag Evaluation.
+* When $dd_1 = 1$: `0` = **Shared Stack POP Sequence** ($SP--$, Read Stack $\rightarrow PC$), `1` = **Shared Stack PUSH Sequence** (Write $PC \rightarrow \text{Stack}$, $SP++$).
+
+
+* **`cc1` (`OPERAND[3]` — Phase 2 Action / Flag Select):**
+* Selects Phase 2 bus drive mode, or chooses condition flag (`0` = $ZF$, `1` = $CF$).
+
+
+* **`cc0` (`OPERAND[2]` — Target Modifier / AE Restore Select):**
+* Selects address drive target (`0` = `RegA:RegB`, `1` = Vector `0xF2`), condition invert, or $SP$ restore enable for `RETK`.
+
+
+
+---
+
+##### Fixed 6-Cycle Phase Composition ($T_1 \dots T_6$)
+
+All 16 diagonal escape instructions run for a **uniform 6 T-steps** ($T_1 \dots T_6$), eliminating dynamic ring-counter reset logic and variable-length phase decoders:
 
 ```text
-               QUADRANT 0 DIAGONAL ESCAPE MATRIX (dd == ss)
-               
-   Destination (dd)   cc = 00         cc = 01         cc = 10         cc = 11
-   ────────────────   ─────────────   ─────────────   ─────────────   ─────────────
-   RegA (00)          NOP    (0x00)   SKP    (0x04)   GETPC  (0x08)   SRESET (0x0C)
-   RegB (01)          SZ     (0x11)   SNZ    (0x15)   SC     (0x19)   SNC    (0x1D)
-   RegC (10)          JU     (0x22)   RETK   (0x26)   RETI   (0x2A)   HALT   (0x2E)
-   RegD (11)          CALL   (0x33)   RET    (0x37)   PUSHPC (0x3B)   SWI    (0x3F)
+  T1        T2        T3          T4          T5          T6
+┌─────────┬─────────┬───────────┬───────────┬───────────┬───────────┐
+│ Fetch   │ Fetch   │  Phase 1  │  Phase 1  │  Phase 2  │  Phase 2  │
+│ Opcode  │ Operand │  Step 1   │  Step 2   │  Step 1   │  Step 2   │
+└─────────┴─────────┴───────────┴───────────┴───────────┴───────────┘
+                     ◄── Stack / Eval Phase ──► ◄── Bus / Action Phase ─►
+                                                         └── Reset @ T6
 
 ```
 
-##### Master Q0 Diagonal Decode Matrix
+* **Fetch Phase ($T_1, T_2$):** Dual-nibble instruction fetch (`OPCODE` then `OPERAND`).
+* **Phase 1 ($T_3, T_4$):** Dedicated to Stack operations (Push / Pop) or Flag condition sampling.
+* **Phase 2 ($T_5, T_6$):** Dedicated to driving address vectors (`RegA:RegB` or Vector `0xF2`), performing $SP$ Ascending Empty restores (`RETK`), or asserting control resets/skips.
 
-| Binary (`OP_OPR`) | Hex Code | Mnemonic | Operational Description | Execution Cycles | Net $\Delta SP$ |
-| --- | --- | --- | --- | --- | --- |
-| `00_00 0000` | **`0x00`** | **`NOP`** | No Operation; advances pipeline | 2 ($T_1..T_2$) | 0 |
-| `00_00 0100` | **`0x04`** | **`SKP`** | Unconditional Skip; increments $PC \leftarrow PC + 2$ | 2 ($T_1..T_2$) | 0 |
-| `00_00 1000` | **`0x08`** | **`GETPC`** | Capture current $PC$ vector to $RegA:RegB$ | 2 ($T_1..T_2$) | 0 |
-| `00_00 1100` | **`0x0C`** | **`SRESET`** | Software Reset; asserts hardware system reset pulse | 2 ($T_1..T_2$) | 0 |
-| `00_01 0001` | **`0x11`** | **`SZ`** | Skip if Zero ($ZF = 1$); $PC \leftarrow PC + 2$ | 2 ($T_1..T_2$) | 0 |
-| `00_01 0101` | **`0x15`** | **`SNZ`** | Skip if Not Zero ($ZF = 0$); $PC \leftarrow PC + 2$ | 2 ($T_1..T_2$) | 0 |
-| `00_01 1001` | **`0x19`** | **`SC`** | Skip if Carry ($CF = 1$); $PC \leftarrow PC + 2$ | 2 ($T_1..T_2$) | 0 |
-| `00_01 1101` | **`0x1D`** | **`SNC`** | Skip if No Carry ($CF = 0$); $PC \leftarrow PC + 2$ | 2 ($T_1..T_2$) | 0 |
-| `00_10 0010` | **`0x22`** | **`JU`** | Jump Unconditional; $PC \leftarrow RegA:RegB$ | 4 ($T_0..T_3$) | 0 |
-| `00_10 0110` | **`0x26`** | **`RETK`** | Return & Keep Stack; reads $PCH:PCL$ to $PC$, restores $SP$ ($T_4..T_5$) | 6 ($T_0..T_5$) | **0** |
-| `00_10 1010` | **`0x2A`** | **`RETI`** | Return from Interrupt; pops $PCH:PCL$ to $PC$, sets $IE \leftarrow 1$ | 4 ($T_0..T_3$) | **$+2$** |
-| `00_10 1110` | **`0x2E`** | **`HALT`** | Assert `HALT_STAT`; freezes master clock | Infinite | 0 |
-| `00_11 0011` | **`0x33`** | **`CALL`** | Subroutine Call; pushes $PCH:PCL$ to `STACK`, $PC \leftarrow RegA:RegB$ | 6 ($T_0..T_5$) | **$-2$** |
-| `00_11 0111` | **`0x37`** | **`RET`** | Return from Subroutine; pops $PCH:PCL$ from `STACK` to $PC$ | 4 ($T_0..T_3$) | **$+2$** |
-| `00_11 1011` | **`0x3B`** | **`PUSHPC`** | Push Program Counter; pushes $PCH:PCL$ onto `STACK` | 4 ($T_0..T_3$) | **$-2$** |
-| `00_11 1111` | **`0x3F`** | **`SWI`** | Software Trap; pushes $PCH:PCL$ to `STACK`, vectors to `0xF2` | 6 ($T_0..T_5$) | **$-2$** |
+---
+
+##### Ascending Empty (AE) Stack Mechanics & `RETK` Restore
+
+The hardware return stack operates as **Ascending Empty (AE)**: $SP$ points to the next empty slot above valid data.
+
+* **PUSH (`PUSHPC`, `CALL`, `SWI`):** Writes $PCH/PCL \rightarrow \text{STACK}[SP]$, then increments $SP$ ($SP \leftarrow SP + 1$ per nibble $\Rightarrow +2$ total).
+* **POP (`RET`, `RETI`):** Decrements $SP$ ($SP \leftarrow SP - 1$ per nibble $\Rightarrow -2$ total), then reads $\text{STACK}[SP] \rightarrow PCH/PCL$.
+* **Return & Keep Stack (`RETK`):** Uses the exact same shared POP sequence during $T_3, T_4$ ($SP--$, read stack into $PC$), and uses $T_5, T_6$ to increment $SP$ back up ($SP++, SP++$), restoring $SP$ to its original empty slot ($\text{Net } \Delta SP = 0$).
+
+---
+
+##### $4 \times 4$ Bitmapped Sub-Operation Layout
+
+```text
+                       OPERAND[3:2] SubOp Field (cc = cc1 cc0)
+                   cc = 00         cc = 01         cc = 10         cc = 11
+               ──────────────  ──────────────  ──────────────  ──────────────
+dd = 00 (RegA) NOP    (0x00)   SKP    (0x04)   GETPC  (0x08)   SRESET (0x0C)
+dd = 01 (RegB) SZ     (0x11)   SNZ    (0x15)   SC     (0x19)   SNC    (0x1D)
+dd = 10 (RegC) RET    (0x22)   RETK   (0x26)   RETI   (0x2A)   HALT   (0x2E)
+dd = 11 (RegD) JU     (0x33)   CALL   (0x37)   PUSHPC (0x3B)   SWI    (0x3F)
+
+```
+
+---
+
+##### Master Q0 Bitmapped Diagonal Decode Matrix
+
+| Binary (`OP_OPR`) | Hex Code | Mnemonic | Phase 1 Shared Action ($T_3, T_4$) | Phase 2 Shared Action ($T_5, T_6$) | Total T-Steps | Net $\Delta SP$ |
+| --- | --- | --- | --- | --- | --- | --- |
+| `00_00 0000` | **`0x00`** | **`NOP`** | Idle | Idle | **6** | 0 |
+| `00_00 0100` | **`0x04`** | **`SKP`** | Idle | Unconditional Skip Pulse ($PC \leftarrow PC + 2$) | **6** | 0 |
+| `00_00 1000` | **`0x08`** | **`GETPC`** | Idle | Latch $PCH:PCL \rightarrow RegA:RegB$ | **6** | 0 |
+| `00_00 1100` | **`0x0C`** | **`SRESET`** | Idle | Assert Software System Reset Pulse | **6** | 0 |
+| `00_01 0001` | **`0x11`** | **`SZ`** | Eval $ZF == 1$ | If True: Skip Pulse ($PC \leftarrow PC + 2$) | **6** | 0 |
+| `00_01 0101` | **`0x15`** | **`SNZ`** | Eval $ZF == 0$ | If True: Skip Pulse ($PC \leftarrow PC + 2$) | **6** | 0 |
+| `00_01 1001` | **`0x19`** | **`SC`** | Eval $CF == 1$ | If True: Skip Pulse ($PC \leftarrow PC + 2$) | **6** | 0 |
+| `00_01 1101` | **`0x1D`** | **`SNC`** | Eval $CF == 0$ | If True: Skip Pulse ($PC \leftarrow PC + 2$) | **6** | 0 |
+| `00_10 0010` | **`0x22`** | **`RET`** | **POP Sequence** ($SP--$, Read Stack $\rightarrow PC$) | Idle Phase 2 | **6** | **$-2$** |
+| `00_10 0110` | **`0x26`** | **`RETK`** | **POP Sequence** ($SP--$, Read Stack $\rightarrow PC$) | **AE Restore Sequence** ($SP++, SP++$) | **6** | **0** |
+| `00_10 1010` | **`0x2A`** | **`RETI`** | **POP Sequence** ($SP--$, Read Stack $\rightarrow PC$) | **Interrupt Enable** ($IE \leftarrow 1$) | **6** | **$-2$** |
+| `00_10 1110` | **`0x2E`** | **`HALT`** | Idle Phase 1 | **Freeze Clock** (Assert `HALT_STAT`) | **6** | 0 |
+| `00_11 0011` | **`0x33`** | **`JU`** | Idle Phase 1 | **Drive Target AB** (`RegA:RegB` $\rightarrow PC$) | **6** | 0 |
+| `00_11 0111` | **`0x37`** | **`CALL`** | **PUSH Sequence** ($PC \rightarrow \text{Stack}$, $SP++$) | **Drive Target AB** (`RegA:RegB` $\rightarrow PC$) | **6** | **$+2$** |
+| `00_11 1011` | **`0x3B`** | **`PUSHPC`** | **PUSH Sequence** ($PC \rightarrow \text{Stack}$, $SP++$) | Idle Phase 2 | **6** | **$+2$** |
+| `00_11 1111` | **`0x3F`** | **`SWI`** | **PUSH Sequence** ($PC \rightarrow \text{Stack}$, $SP++$) | **Drive Target Vector** (Vector `0xF2` $\rightarrow PC$) | **6** | **$+2$** |
+
+---
+
+##### Discrete Control Pass-Gate Equations
+
+1. **Shared Phase 1 Stack POP Enable (`RET`, `RETK`, `RETI`):**
+
+$$\text{POP\_SEQ\_ENABLE} = \text{ESCAPE\_EN} \cdot (dd_1 \cdot \overline{dd_0}) \cdot \overline{cc_1 \cdot cc_0} \cdot (T_3 \lor T_4)$$
+
+
+2. **Shared Phase 1 Stack PUSH Enable (`CALL`, `PUSHPC`, `SWI`):**
+
+$$\text{PUSH\_SEQ\_ENABLE} = \text{ESCAPE\_EN} \cdot (dd_1 \cdot dd_0) \cdot (cc_1 \lor cc_0) \cdot (T_3 \lor T_4)$$
+
+
+3. **Shared Phase 2 Address Bus Drive (`JU`, `CALL`, `SWI`):**
+
+$$\text{DRIVE\_AB\_ENABLE} = \text{ESCAPE\_EN} \cdot (dd_1 \cdot dd_0) \cdot \overline{cc_1} \cdot (T_5 \lor T_6)$$
+
+
+$$\text{DRIVE\_VEC\_ENABLE} = \text{ESCAPE\_EN} \cdot (dd_1 \cdot dd_0) \cdot (cc_1 \cdot cc_0) \cdot (T_5 \lor T_6)$$
+
+
+4. **Shared Phase 2 Ascending Empty SP Restore (`RETK`):**
+
+$$\text{SP\_RESTORE\_ENABLE} = \text{ESCAPE\_EN} \cdot (dd_1 \cdot \overline{dd_0}) \cdot (\overline{cc_1} \cdot cc_0) \cdot (T_5 \lor T_6)$$
+
+
 
 ---
 
@@ -327,7 +418,7 @@ Loads a 4-bit literal value (`#imm[3:0]`, `#0..15`) directly into target registe
 
 | Binary Pattern | Mnemonic | Hardware Action | Execution Cycle |
 | --- | --- | --- | --- |
-| `10_dd #imm` | **`LDI dst, #imm`** | $dst \leftarrow \text{OPERAND}[3:0]$ | Resets at $T_3$ |
+| `10_dd #imm` | **`LDI dst, #imm`** | $dst \leftarrow \text{OPERAND}[3:0]$ | Resets at $T_4$ |
 
 ---
 
@@ -388,11 +479,11 @@ When operating in **Arithmetic Mode (`EXT = 0`)**, bit `opr[0]` acts as a dual-f
 
 ## 6. Pipeline Timestep Matrix ($T_1 \dots T_6$)
 
-| Instruction Class | $T_1$ (Addr Drive / Precharge) | $T_2$ (Fetch Opcode / PC+1) | $T_3$ (Decode / Read SRC) | $T_4$ (SRC Drive / Latch B) | $T_5$ (Compute / Switch SYS) | $T_6$ (Writeback / Commit) |
+| Instruction Class | $T_1$ (Addr Drive / Precharge) | $T_2$ (Fetch Opcode / PC+1) | $T_3$ (Phase 1 Step 1) | $T_4$ (Phase 1 Step 2) | $T_5$ (Phase 2 Step 1) | $T_6$ (Phase 2 Step 2 / Reset) |
 | --- | --- | --- | --- | --- | --- | --- |
 | **Q0: Register Move** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Drive `opr[2]` $\rightarrow$ `SYS_SEL` | Assert `~OE1[src]` $\rightarrow$ `BUS` | Switch `SYS_SEL` $\rightarrow$ `opr[3]` | Assert `~WE[dst]` on `CLK` LOW |
 | **Q0: Memory Read** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Drive `RegC:RegD` $\rightarrow$ ADDR | Assert `~MEM_OE` $\rightarrow$ `BUS` | Switch `SYS_SEL` $\rightarrow$ `DST_SYS` | Assert `~WE[dst]` on `CLK` LOW |
-| **Q0: RETK (6-Cycle)** | Assert `SP` $\rightarrow$ ADDR | Read $PCL \rightarrow PC$, Auto-DEC $SP$ | Read $PCH \rightarrow PC$, Auto-DEC $SP$ | Assert `SP_INC` Pulse 1 | Assert `SP_INC` Pulse 2 | Restores $SP$, Reset Pipeline |
+| **Q0: Control Escape (Fixed 6-Cycle)** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Phase 1: Stack Push/Pop or Flag Sample | Phase 1: Stack Push/Pop or Flag Sample | Phase 2: Vector Drive / SP AE Restore | Phase 2: Vector Drive / Reset Pipeline |
 | **Q1: Reg-Reg ALU** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Drive `~OE1[src]` $\rightarrow$ `Latch_B` | Drive `~OE2[dst]` $\rightarrow$ `Latch_A` | Hold $C_g$ Compute State | Write `ALU_OUT` $\rightarrow$ `dst`, Sample Flags |
 | **Q2: Load Immediate** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Drive `OPERAND` $\rightarrow$ `BUS` | Assert `~WE[dst]` on `CLK` LOW | Reset Pipeline State | — |
 | **Q3: Immediate ALU** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Sample `#imm1` / `EXT` $\rightarrow$ ALU Input B | Drive `~OE2[dst]` $\rightarrow$ `Latch_A` | Compute Result | Write `ALU_OUT` $\rightarrow$ `dst`, Sample Flags |
