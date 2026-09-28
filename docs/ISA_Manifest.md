@@ -8,7 +8,7 @@
 
 **Physical Hierarchy:** 32-Pin Master Backplane Bus $\rightarrow$ Universal Base Cards (UBC) $\rightarrow$ Control Harnesses $\rightarrow$ Central Control Board (CCB) & Daughtercards
 
-**Logic Standard:** Active-LOW discrete 2N7000 NMOS pass-transistors and depletion loads with $2.2\text{ k}\Omega$ pull-up resistors to $+5\text{V}$.
+**Logic Standard:** Active-LOW discrete 2N7000 NMOS pass-transistors and passive pull-up resistors to $+5\text{V}$.
 
 ---
 
