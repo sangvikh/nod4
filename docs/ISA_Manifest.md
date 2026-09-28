@@ -33,7 +33,7 @@ LATCH_ENABLE ──────────────────────�
                                                    └───────────────────────┘
                                                    ▲                       ▲
                                             Data Transparent        Data Latched
-                                            (Latch Open)            (Frozen on CLK Falling Edge)
+                                            (Latch Open)            (Frozen on CLK Rising Edge)
 
 ```
 
@@ -44,7 +44,7 @@ LATCH_ENABLE ──────────────────────�
 * **Output Enable (`OE`):** Asserts continuously across the entire duration of a T-state step to allow passive pull-ups and dynamic bus capacitance ($C_g$) to charge and settle completely.
 
 
-* **Write Enable (`WE`):** Strictly gated by **`CLK` LOW** ($\text{T\_step} \cdot \overline{\text{CLK}}$) to eliminate write-glitches, enforce data setup time, and freeze transparent latch contents on the trailing edge.
+* **Write Enable (`WE`):** Strictly gated by **`CLK` LOW** ($\text{T\_step} \cdot \overline{\text{CLK}}$) to eliminate write-glitches, enforce data setup time, and freeze transparent latch contents on the **CLK rising edge** as `CLK` transitions from LOW to HIGH.
 
 
 
@@ -152,13 +152,10 @@ $$\text{Full Destination Register Address} = [\text{opr[3]}, \text{opr[1:0]}]$$
 $$\text{Full Source Register Address} = [\text{opr[2]}, \text{opr[1:0]}]$$
 
 * **Phase-Gated `SYS_SEL` Line:**
-
 * During **$T_3$ / $T_4$ (Source Read):** Central Control Board asserts `opr[2]` onto internal `SYS_SEL` logic.
 
 
 * During **$T_5$ / $T_6$ (Destination Write):** Central Control Board switches `SYS_SEL` to assert `opr[3]`.
-
-
 
 
 
@@ -194,8 +191,6 @@ $$\text{Full Source Register Address} = [\text{opr[2]}, \text{opr[1:0]}]$$
 
 
 2. The following instruction executes **`SC`** (Skip on Carry) or **`SNC`** (Skip on No Carry) in Q0 escapes to branch conditionally in **2 cycles** total, eliminating dedicated branch-steering logic.
-
-
 
 
 
@@ -289,38 +284,25 @@ IE        (Pin 09) ───────────┐
 
 ```
 
-1. **Request Assertion:** An external peripheral pulls `~IRQ` (Pin 05) LOW.
+1. **Request Assertion & Pending Flag:** An external peripheral asserts `~IRQ` (Pin 05 LOW), setting `ir_pending`.
 
 
-2. **Evaluation ($T_6$):** Central Control evaluates $\text{TRIGGER\_IRQ} = \overline{\text{\textasciitilde IRQ}} \cdot \text{IE}$.
+2. **$T_0$ Evaluation & NOP Injection:** At $T_0$ (instruction boundary), if interrupts are enabled ($IE = 1$), Central Control detects `ir_pending`, forces a `NOP` (via `IR_DISABLE`), and triggers an interrupt call.
 
 
-3. **Acknowledge Pulse & State Update ($T_4 \dots T_5$):**
-
-* Central Control drives a 1 T-step active-LOW pulse on `~IRQ_ACK` (Pin 06) to indicate CPU acceptance.
-
-
-* Simultaneously, Central Control clears `IE` in `RegFLAGS` ($IE \leftarrow 0$), driving Pin 09 LOW to prevent nested interrupts.
-
-
+3. **Acknowledge Pulse & State Update ($T_4 \dots T_5$):** Central Control drives a 1 T-step active-LOW pulse on `~IRQ_ACK` (Pin 06) to signal acceptance and clears `IE` in `RegFLAGS` ($IE \leftarrow 0$), driving Pin 09 LOW.
 
 
 4. **Peripheral Release:** The active-LOW pulse on `~IRQ_ACK` signals the peripheral to immediately release `~IRQ` (Pin 05).
 
 
-5. **Vector Hijack & Return:** Return address `PCH:PCL` is saved to `STACK`, execution jumps to the externally supplied IRQ vector, and executing `RETI` restores `IE ← 1` (Pin 09 returns HIGH). Ordinary `RET` preserves `IE`.
-
-The IRQ vector is an 8-bit value supplied by the IRQ card or its associated
-vector hardware. DIP switches may select the vector address. The selected
-address may point to ROM, RAM, or MMIO; a RAM target can therefore contain a
-software-configurable IRQ trampoline.
-
-At the instruction-boundary takeover point (`T0`, called `T1` in the
-one-indexed timing tables), the PC already contains the next instruction
-address. IRQ therefore inhibits the normal PC increment while saving the
-return address; it does not increment the PC again.
+5. **Vector Call & Return:** Return address `PCH:PCL` is saved to `STACK`, execution jumps to the externally supplied IRQ vector, and executing `RETI` restores `IE ← 1` (Pin 09 returns HIGH).
 
 
+
+The IRQ vector is an 8-bit value supplied by the IRQ card or its associated vector hardware. DIP switches may select the vector address. The selected address may point to ROM, RAM, or MMIO; a RAM target can therefore contain a software-configurable IRQ trampoline.
+
+At the instruction-boundary takeover point ($T_0$, called $T_1$ in the one-indexed timing tables), the PC already contains the next instruction address. IRQ therefore inhibits the normal PC increment while saving the return address; it does not increment the PC again.
 
 ---
 
@@ -406,26 +388,24 @@ $$\text{STD\_REG\_DEC\_ENABLE} = \text{IS\_Q0} \cdot \overline{\text{ESCAPE\_EN}
 
 ### Control-Flow Transfer Primitives
 
-Diagonal escapes compose a small set of fixed transfers. These are the
-authoritative architectural operations; individual escape instructions are
-combinations of them rather than unrelated special cases.
+
+
+Diagonal escapes compose a small set of fixed transfers. These are the authoritative architectural operations; individual escape instructions are combinations of them rather than unrelated special cases.
 
 | Primitive | Transfer |
 | --- | --- |
-| `PC_TO_STACK` | `PCH:PCL → STACK` |
-| `STACK_TO_PC` | `STACK → PCH:PCL` |
-| `TARGET_TO_PC` | `RegA:RegB → PCH:PCL` |
-| `PC_TO_TARGET` | `PCH:PCL → RegA:RegB` |
-| `SWI_VECTOR_TO_PC` | Fixed SWI vector → `PCH:PCL` |
-| `IRQ_VECTOR_TO_PC` | External `IRQ_VECTOR[7:0]` → `PCH:PCL` |
-| `PC_INC` | `PC ← PC + 2` |
-| `IE_SET` | `IE ← 1` |
-| `IE_CLEAR` | `IE ← 0` |
-| `SP_RESTORE` | `SP ← SP + 2` |
+| `PC_TO_STACK` | `PCH:PCL → STACK`<br> |
+| `STACK_TO_PC` | `STACK → PCH:PCL`<br> |
+| `TARGET_TO_PC` | `RegA:RegB → PCH:PCL`<br> |
+| `PC_TO_TARGET` | `PCH:PCL → RegA:RegB`<br> |
+| `SWI_VECTOR_TO_PC` | Fixed SWI vector → `PCH:PCL`<br> |
+| `IRQ_VECTOR_TO_PC` | External `IRQ_VECTOR[7:0]` → `PCH:PCL`<br> |
+| `PC_INC` | `PC ← PC + 2`<br> |
+| `IE_SET` | `IE ← 1`<br> |
+| `IE_CLEAR` | `IE ← 0`<br> |
+| `SP_RESTORE` | `SP ← SP + 2`<br> |
 
-The paired control-pointer transfers are explicit: `JU` is `RegA:RegB →
-PCH:PCL`, while `GETPC` is the reverse transfer. The data pointer `RegC:RegD`
-is not implicitly involved in control-flow operations.
+The paired control-pointer transfers are explicit: `JU` is `RegA:RegB → PCH:PCL`, while `GETPC` is the reverse transfer. The data pointer `RegC:RegD` is not implicitly involved in control-flow operations.
 
 The principal compositions are:
 
@@ -439,6 +419,7 @@ RETI   = STACK_TO_PC + IE_SET
 RETK   = STACK_TO_PC + SP_RESTORE
 SWI    = PC_TO_STACK + SWI_VECTOR_TO_PC
 IRQ    = PC_TO_STACK + IE_CLEAR + IRQ_VECTOR_TO_PC
+
 ```
 
 ##### Direct Bitmapped Control Bit Allocations
@@ -448,24 +429,23 @@ IRQ    = PC_TO_STACK + IE_CLEAR + IRQ_VECTOR_TO_PC
 $$\text{Control Vector} = \big[\, \underbrace{d_1}_{\text{Stack Enable}} \,,\, \underbrace{d_0}_{\text{Jump / PC Enable}} \,,\, \underbrace{c_1}_{\text{Action / Flag Select}} \,,\, \underbrace{c_0}_{\text{Target / Restore Select}} \,\big]$$
 
 * **`d1` (`OPCODE[1]` — Stack Operation Enable):**
-
 * `0`: Non-Stack Control Operations (`NOP`, `SKP`, `GETPC`, `SRESET`, Conditional Skips `SZ/SNZ/SC/SNC`).
+
+
 * `1`: Stack Control Operations (`RET`, `RETK`, `RETI`, `HALT`, `JU`, `CALL`, `PUSHPC`, `SWI`).
 
 
 * **`d0` (`OPCODE[0]` — Jump / Shared Sequence Selector):**
-
 * When $d_1 = 0$: `0` = Subop / Idle Row (`NOP`, `SKP`, `GETPC`, `SRESET`), `1` = Conditional Flag Evaluation.
+
+
 * When $d_1 = 1$: `0` = Shared Stack POP Sequence ($SP--$, Read Stack $\rightarrow PC$), `1` = Shared Stack PUSH Sequence (Write $PC \rightarrow \text{Stack}$, $SP++$).
 
 
 * **`c1` (`OPERAND[3]` — Phase 2 Action / Flag Select):** Selects Phase 2 bus drive mode, or chooses condition flag (`0` = $ZF$, `1` = $CF$).
 
 
-* **`c0` (`OPERAND[2]` — Target Modifier / AE Restore Select):** Selects
-  address-drive target (`0` = `RegA:RegB`, `1` = the fixed SWI vector),
-  condition invert, or $SP$ restore enable for `RETK`. Hardware IRQ entry
-  uses the separate externally supplied `IRQ_VECTOR` source.
+* **`c0` (`OPERAND[2]` — Target Modifier / AE Restore Select):** Selects address-drive target (`0` = `RegA:RegB`, `1` = the fixed SWI vector), condition invert, or $SP$ restore enable for `RETK`. Hardware IRQ entry uses the separate externally supplied `IRQ_VECTOR` source.
 
 
 
@@ -488,12 +468,12 @@ Operations execute across time-step slots with standard micro-step resets ($T_2$
 ```
 
 * **Passive `NOP` Execution (`0x00`):** `NOP` ($d_1=0, d_0=0, c_1=0, c_0=0$) requires **zero subop decoding logic and zero early-reset gates**. Because all action enable lines ($d_1, d_0$) sit at $0\text{ V}$ (passive inactive state), the machine steps passively through $T_3 \dots T_6$ doing nothing. At $T_6$, the natural shift register pulse resets the ring counter back to $T_1$.
+
+
 * **Phase 1 ($T_3, T_4$):** Handles Stack operations (Push / Pop) or Flag condition sampling. Single-phase subops reset at $T_4$.
 
 
-* **Phase 2 ($T_5, T_6$):** Drives address vectors (`RegA:RegB`, the fixed
-  SWI vector, or the externally supplied `IRQ_VECTOR`), or performs $SP$
-  Ascending Empty restores (`RETK`). Multi-phase subops reset at $T_6$.
+* **Phase 2 ($T_5, T_6$):** Drives address vectors (`RegA:RegB`, the fixed SWI vector, or the externally supplied `IRQ_VECTOR`), or performs $SP$ Ascending Empty restores (`RETK`). Multi-phase subops reset at $T_6$.
 
 
 
@@ -513,10 +493,9 @@ The hardware return stack operates as **Ascending Empty (AE)**: `SP` points to t
 
 * **Return & Keep Stack (`RETK`):** Performs the normal two-nibble pop, then increments `SP` twice during phase 2. Net stack-pointer change is zero.
 
-The same stack convention is used by ordinary `CALL` and hardware IRQ entry.
-`RET` preserves `IE`; `RETI` sets `IE` after restoring the PC. The apparent
-`PCL`-then-`PCH` order during POP is a consequence of the ascending-empty
-stack; the stored return address remains `PCH:PCL`.
+
+
+The same stack convention is used by ordinary `CALL` and hardware IRQ entry. `RET` preserves `IE`; `RETI` sets `IE` after restoring the PC. The apparent `PCL`-then-`PCH` order during POP is a consequence of the ascending-empty stack; the stored return address remains `PCH:PCL`.
 
 The physical two-cycle sequences are authoritative:
 
@@ -528,9 +507,8 @@ PUSH (CALL, PUSHPC, SWI, IRQ):
 POP (RET, RETI, RETK):
     Tn:   SP ← SP - 1 ; PCL ← STACK[SP]
     Tn+1: SP ← SP - 1 ; PCH ← STACK[SP]
+
 ```
-
-
 
 ---
 
@@ -557,22 +535,42 @@ dd = 11 (RegD) JU     (0x33)   CALL   (0x37)   PUSHPC (0x3B)   SWI    (0x3F)
 
 | Binary (`OP_OPR`) | Hex Code | Mnemonic | Phase 1 Shared Action ($T_3, T_4$) | Phase 2 Shared Action ($T_5, T_6$) | Total T-Steps | Early Reset Step | Net $\Delta SP$ |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `00_00 0000` | **`0x00`** | **`NOP`** | Passive Idle | Passive Idle | **6** | **$T_6$ (Natural)** | 0 |
-| `00_00 0100` | **`0x04`** | **`SKP`** | Drive `PC_INC` ($PC \leftarrow PC + 2$) | Idle Phase 2 | **4** | **$T_4$** | 0 |
-| `00_00 1000` | **`0x08`** | **`GETPC`** | Latch $PCH:PCL \rightarrow RegA:RegB$ | Idle Phase 2 | **4** | **$T_4$** | 0 |
-| `00_00 1100` | **`0x0C`** | **`SRESET`** | Assert System Reset Rail | Idle Phase 2 | **2** | **$T_2$** | 0 |
-| `00_01 0001` | **`0x11`** | **`SZ`** | Eval $ZF == 1$ | True: `PC_INC` / False: Early Reset | **4 / 2** | **$T_4$ (True) / $T_2$ (False)** | 0 |
-| `00_01 0101` | **`0x15`** | **`SNZ`** | Eval $ZF == 0$ | True: `PC_INC` / False: Early Reset | **4 / 2** | **$T_4$ (True) / $T_2$ (False)** | 0 |
-| `00_01 1001` | **`0x19`** | **`SC`** | Eval $CF == 1$ | True: `PC_INC` / False: Early Reset | **4 / 2** | **$T_4$ (True) / $T_2$ (False)** | 0 |
-| `00_01 1101` | **`0x1D`** | **`SNC`** | Eval $CF == 0$ | True: `PC_INC` / False: Early Reset | **4 / 2** | **$T_4$ (True) / $T_2$ (False)** | 0 |
-| `00_10 0010` | **`0x22`** | **`RET`** | **POP Sequence** ($SP--$, Read Stack $\rightarrow PC$) | Idle Phase 2 | **4** | **$T_4$** | **$-2$** |
-| `00_10 0110` | **`0x26`** | **`RETK`** | **POP Sequence** ($SP--$, Read Stack $\rightarrow PC$) | **AE Restore Sequence** ($SP++, SP++$) | **6** | **$T_6$ (Natural)** | **0** |
-| `00_10 1010` | **`0x2A`** | **`RETI`** | **POP Sequence** ($SP--$, Read Stack $\rightarrow PC$) | **Interrupt Enable** ($IE \leftarrow 1$) | **4** | **$T_4$** | **$-2$** |
-| `00_10 1110` | **`0x2E`** | **`HALT`** | Freeze Clock (Assert `HALT_STAT`) | Idle Phase 2 | **2** | **$T_2$** | 0 |
-| `00_11 0011` | **`0x33`** | **`JU`** | **Drive Target AB** (`RegA:RegB` $\rightarrow PC$) | Idle Phase 2 | **4** | **$T_4$** | 0 |
-| `00_11 0111` | **`0x37`** | **`CALL`** | **PUSH Sequence** ($PC \rightarrow \text{Stack}$, $SP++$) | **Drive Target AB** (`RegA:RegB` $\rightarrow PC$) | **6** | **$T_6$ (Natural)** | **$+2$** |
-| `00_11 1011` | **`0x3B`** | **`PUSHPC`** | **PUSH Sequence** ($PC \rightarrow \text{Stack}$, $SP++$) | Idle Phase 2 | **4** | **$T_4$** | **$+2$** |
-| `00_11 1111` | **`0x3F`** | **`SWI`** | **PUSH Sequence** ($PC \rightarrow \text{Stack}$, $SP++$) | **Drive SWI Vector** (fixed vector $\rightarrow PC$) | **6** | **$T_6$ (Natural)** | **$+2$** |
+| `00_00 0000` | **`0x00`** | **`NOP`** | Passive Idle | Passive Idle | **6** | **$T_6$ (Natural)** | 0
+
+ |
+| `00_00 0100` | **`0x04`** | **`SKP`** | Drive `PC_INC` ($PC \leftarrow PC + 2$) | Idle Phase 2 | **4** | **$T_4$** | 0
+
+ |
+| `00_00 1000` | **`0x08`** | **`GETPC`** | Latch $PCH:PCL \rightarrow RegA:RegB$ | Idle Phase 2 | **4** | **$T_4$** | 0
+
+ |
+| `00_00 1100` | **`0x0C`** | **`SRESET`** | Assert System Reset Rail | Idle Phase 2 | **2** | **$T_2$** | 0
+
+ |
+| `00_01 0001` | **`0x11`** | **`SZ`** | Eval $ZF == 1$ | True: `PC_INC` / False: Early Reset | **4 / 2** | **$T_4$ (True) / $T_2$ (False)** | 0
+
+ |
+| `00_01 0101` | **`0x15`** | **`SNZ`** | Eval $ZF == 0$ | True: `PC_INC` / False: Early Reset | **4 / 2** | **$T_4$ (True) / $T_2$ (False)** | 0
+
+ |
+| `00_01 1001` | **`0x19`** | **`SC`** | Eval $CF == 1$ | True: `PC_INC` / False: Early Reset | **4 / 2** | **$T_4$ (True) / $T_2$ (False)** | 0
+
+ |
+| `00_01 1101` | **`0x1D`** | **`SNC`** | Eval $CF == 0$ | True: `PC_INC` / False: Early Reset | **4 / 2** | **$T_4$ (True) / $T_2$ (False)** | 0
+
+ |
+| `00_10 0010` | **`0x22`** | **`RET`** | **POP Sequence** ($SP--$, Read Stack $\rightarrow PC$) | Idle Phase 2 | **4** | **$T_4$** | **$-2$**<br> |
+| `00_10 0110` | **`0x26`** | **`RETK`** | **POP Sequence** ($SP--$, Read Stack $\rightarrow PC$) | **AE Restore Sequence** ($SP++, SP++$) | **6** | **$T_6$ (Natural)** | **0**<br> |
+| `00_10 1010` | **`0x2A`** | **`RETI`** | **POP Sequence** ($SP--$, Read Stack $\rightarrow PC$) | **Interrupt Enable** ($IE \leftarrow 1$) | **4** | **$T_4$** | **$-2$**<br> |
+| `00_10 1110` | **`0x2E`** | **`HALT`** | Freeze Clock (Assert `HALT_STAT`) | Idle Phase 2 | **2** | **$T_2$** | 0
+
+ |
+| `00_11 0011` | **`0x33`** | **`JU`** | **Drive Target AB** (`RegA:RegB` $\rightarrow PC$) | Idle Phase 2 | **4** | **$T_4$** | 0
+
+ |
+| `00_11 0111` | **`0x37`** | **`CALL`** | **PUSH Sequence** ($PC \rightarrow \text{Stack}$, $SP++$) | **Drive Target AB** (`RegA:RegB` $\rightarrow PC$) | **6** | **$T_6$ (Natural)** | **$+2$**<br> |
+| `00_11 1011` | **`0x3B`** | **`PUSHPC`** | **PUSH Sequence** ($PC \rightarrow \text{Stack}$, $SP++$) | Idle Phase 2 | **4** | **$T_4$** | **$+2$**<br> |
+| `00_11 1111` | **`0x3F`** | **`SWI`** | **PUSH Sequence** ($PC \rightarrow \text{Stack}$, $SP++$) | **Drive SWI Vector** (fixed vector $\rightarrow PC$) | **6** | **$T_6$ (Natural)** | **$+2$**<br> |
 
 ---
 
@@ -582,23 +580,19 @@ dd = 11 (RegD) JU     (0x33)   CALL   (0x37)   PUSHPC (0x3B)   SWI    (0x3F)
 
 1. **Shared Phase 1 Stack POP Enable (`RET`, `RETK`, `RETI`):**
 
-
 $$\text{POP\_SEQ\_ENABLE} = \text{ESCAPE\_EN} \cdot (d_1 \cdot \overline{d_0}) \cdot \overline{c_1 \cdot c_0} \cdot (T_3 \lor T_4)$$
 
 2. **Shared Phase 1 Stack PUSH Enable (`CALL`, `PUSHPC`, `SWI`):**
 
-
 $$\text{PUSH\_SEQ\_ENABLE} = \text{ESCAPE\_EN} \cdot (d_1 \cdot d_0) \cdot (c_1 \lor c_0) \cdot (T_3 \lor T_4)$$
 
 3. **Shared Phase 2 Address Bus Drive (`JU`, `CALL`, `SWI`):**
-
 
 $$\text{DRIVE\_AB\_ENABLE} = \text{ESCAPE\_EN} \cdot (d_1 \cdot d_0) \cdot \overline{c_1} \cdot (T_5 \lor T_6)$$
 
 $$\text{DRIVE\_VEC\_ENABLE} = \text{ESCAPE\_EN} \cdot (d_1 \cdot d_0) \cdot (c_1 \cdot c_0) \cdot (T_5 \lor T_6)$$
 
 4. **Shared Phase 2 Ascending Empty SP Restore (`RETK`):**
-
 
 $$\text{SP\_RESTORE\_ENABLE} = \text{ESCAPE\_EN} \cdot (d_1 \cdot \overline{d_0}) \cdot (\overline{c_1} \cdot c_0) \cdot (T_5 \lor T_6)$$
 
@@ -612,9 +606,13 @@ $$\text{RESET\_T2} = T_2 \cdot \underbrace{\overline{d_1} \cdot d_0}_{\text{Skip
 
 * **$T_4$ Reset Pulse:** Asserts for single-phase instructions completing at $T_4$:
 
+
+
 $$\text{RESET\_T4} = T_4 \cdot \text{SINGLE\_PHASE\_MASK}$$
 
 * **$T_6$ Natural Reset:** Natural connection from 6th shift register stage directly to `SEQ_RESET` ($T_6 \rightarrow \text{SEQ\_RESET}$), recycling `NOP`, `RETK`, `CALL`, and `SWI`.
+
+
 
 ---
 
@@ -698,7 +696,6 @@ In Quadrant 3, the `EXT` mode bit (`opr[1]`) determines whether execution uses t
 When operating in **Arithmetic Mode (`EXT = 0`)**, bit `opr[0]` acts as a dual-function control: it selects between immediate payload values (`#0` vs. `#1`) and toggles the carry-in source ($C_{in}$):
 
 * **Carry Propagation Mode (`opr[0] = 0` / Immediate `#0`):**
-
 * **$B$-Bus Drive:** Sets $B = 0\text{x0}$ (for ADD) or $B = 0\text{xF}$ (for SUB).
 
 
@@ -708,16 +705,11 @@ When operating in **Arithmetic Mode (`EXT = 0`)**, bit `opr[0]` acts as a dual-f
 * **Result:** Performs $dst \leftarrow dst + 0 + CF$ (`ADC`) or $dst \leftarrow dst + 0\text{xF} + CF$ (`SBB`), allowing clean multi-nibble chained arithmetic.
 
 
-
-
 * **Fixed Immediate Mode (`opr[0] = 1` / Immediate `#1`):**
-
 * **$B$-Bus Drive:** Sets `inv_b = 1` ($B = 0\text{x1}$ for ADD, $B = 0\text{xE}$ for SUB).
 
 
 * **$C_{in}$ Source Gate:** $C_{in}$ is derived statically through `inv_b` inversion ($C_{in} \leftarrow \overline{C_{in}}$), executing direct increment (`ADDI #1`) or decrement (`SUBI #1`) without inheriting prior Carry Flag states.
-
-
 
 
 
@@ -763,7 +755,9 @@ When operating in **Arithmetic Mode (`EXT = 0`)**, bit `opr[0]` acts as a dual-f
 | **Q0: Memory Read** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Drive `RegC:RegD` $\rightarrow$ ADDR | Assert `~MEM_OE` $\rightarrow$ `BUS` | Switch `SYS_SEL` $\rightarrow$ `DST_SYS` | Assert `~WE[dst]` on `CLK` LOW
 
  |
-| **Q0: Passive `NOP` (`0x00`)** | Assert `PC` $\rightarrow$ ADDR | Fetch `0x0` Payload | Passive Idle (Buses Off) | Passive Idle (Buses Off) | Passive Idle (Buses Off) | Passive Idle $\rightarrow$ Natural $T_6$ Reset |
+| **Q0: Passive `NOP` (`0x00`)** | Assert `PC` $\rightarrow$ ADDR | Fetch `0x0` Payload | Passive Idle (Buses Off) | Passive Idle (Buses Off) | Passive Idle (Buses Off) | Passive Idle $\rightarrow$ Natural $T_6$ Reset
+
+ |
 | **Q0: Single-Phase Escapes** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Stack Pop / Target AB Drive | Stack Pop / Target AB Drive | — (Early Reset @ $T_4$) | —
 
  |
@@ -777,87 +771,83 @@ When operating in **Arithmetic Mode (`EXT = 0`)**, bit `opr[0]` acts as a dual-f
 | **Q3: Immediate ALU** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Sample `#imm1` / `EXT` $\rightarrow$ ALU Input B | Drive `~OE2[dst]` $\rightarrow$ `Latch_A` | Compute Result | Write `ALU_OUT` $\rightarrow$ `dst`, Sample Flags
 
  |
-| **Hardware Interrupt** | Freeze `PC`, assert `IR_DISABLE`, inhibit `PC_INC` | Passive NOP / IRQ acceptance | Push $PCH_{\text{return}} \rightarrow$ STACK | Push $PCL_{\text{return}} \rightarrow$ STACK, Pulse `~IRQ_ACK` (Pin 06) | Clear $IE \leftarrow 0$ (Pin 09 LOW) | Load external `IRQ_VECTOR` $\rightarrow PCH:PCL$<br> |
+| **Hardware Interrupt** | Eval `ir_pending` at $T_0$; freeze `PC`, assert `IR_DISABLE` (forces NOP), inhibit `PC_INC` | Passive NOP / IRQ acceptance | Push $PCH_{\text{return}} \rightarrow$ STACK | Push $PCL_{\text{return}} \rightarrow$ STACK, Pulse `~IRQ_ACK` (Pin 06) | Clear $IE \leftarrow 0$ (Pin 09 LOW) | Load external `IRQ_VECTOR` $\rightarrow PCH:PCL$<br> |
 
 ---
 
 ## 7. Authoritative Timing and Semantic Clarifications
 
-The following rules supersede any older per-instruction timing wording in
-this document.
+
+
+The following rules supersede any older per-instruction timing wording in this document.
 
 ### Ordinary Instruction Templates
+
+
 
 Most ordinary instructions complete early:
 
 | Instruction class | Completion | Sequencer reset |
 | --- | --- | --- |
-| Q0 register and memory moves | `T2` | `T3` |
-| Q2 `LDI` | `T2` | `T3` |
-| Q1/Q3 ALU operations | `T4` writeback | `T5` |
+| Q0 register and memory moves | `T2` | `T3`<br> |
+| Q2 `LDI` | `T2` | `T3`<br> |
+| Q1/Q3 ALU operations | `T4` writeback | `T5`<br> |
 
-This includes general-register moves, `MEM` reads and writes, system-register
-moves, `MEM ↔ STACK` transfers, and `LDI`. The diagonal escape matrix below is
-the only class that composes longer primitive sequences.
+This includes general-register moves, `MEM` reads and writes, system-register moves, `MEM ↔ STACK` transfers, and `LDI`. The diagonal escape matrix below is the only class that composes longer primitive sequences.
 
 ### Diagonal Escape Primitive Schedule
 
-All escapes fetch the opcode in `T1` and the operand in `T2`. The existing
-flags are already stable while the escape is fetched, so a conditional escape
-may evaluate its condition immediately after `T2`:
+
+
+All escapes fetch the opcode in `T1` and the operand in `T2`. The existing flags are already stable while the escape is fetched, so a conditional escape may evaluate its condition immediately after `T2`:
 
 | Escape | Phase 1 (`T3–T4`) | Phase 2 (`T5–T6`) | Reset |
 | --- | --- | --- | --- |
-| `NOP` | idle | idle | natural `T6` |
-| `SRESET` | — | — | `T2` |
-| `HALT` | — | — | `T2` / halt |
-| failed `SZ/SNZ/SC/SNC` | condition evaluation | — | `T2` |
-| `SKP` or successful conditional skip | `PC_INC` | — | `T4` |
-| `GETPC` | `PC_TO_TARGET` | — | `T4` |
-| `RET` | `STACK_TO_PC` | — | `T4` |
-| `RETI` | `STACK_TO_PC` | `IE_SET` | `T4` |
-| `RETK` | `STACK_TO_PC` | `SP_RESTORE` | natural `T6` |
-| `JU` | `TARGET_TO_PC` | — | `T4` |
-| `PUSHPC` | `PC_TO_STACK` | — | `T4` |
-| `CALL` | `PC_TO_STACK` | `TARGET_TO_PC` | natural `T6` |
-| `SWI` | `PC_TO_STACK` | vector-to-PC | natural `T6` |
+| `NOP` | idle | idle | natural `T6`<br> |
+| `SRESET` | — | — | `T2`<br> |
+| `HALT` | — | — | `T2` / halt
 
-`JU` is specifically `RegA:RegB → PCH:PCL`; `GETPC` is specifically the
-reverse transfer. `RegC:RegD` is not implicitly involved in either operation.
+ |
+| failed `SZ/SNZ/SC/SNC` | condition evaluation | — | `T2`<br> |
+| `SKP` or successful conditional skip | `PC_INC` | — | `T4`<br> |
+| `GETPC` | `PC_TO_TARGET` | — | `T4`<br> |
+| `RET` | `STACK_TO_PC` | — | `T4`<br> |
+| `RETI` | `STACK_TO_PC` | `IE_SET` | `T4`<br> |
+| `RETK` | `STACK_TO_PC` | `SP_RESTORE` | natural `T6`<br> |
+| `JU` | `TARGET_TO_PC` | — | `T4`<br> |
+| `PUSHPC` | `PC_TO_STACK` | — | `T4`<br> |
+| `CALL` | `PC_TO_STACK` | `TARGET_TO_PC` | natural `T6`<br> |
+| `SWI` | `PC_TO_STACK` | vector-to-PC | natural `T6`<br> |
 
-Failed conditional escapes may assert the existing `CYCLE_RESET` line at `T2`
-because `ZF` and `CF` belong to the preceding instruction and are already
-stable. The condition decision must be held long enough for the reset pulse to
-be recognized.
+`JU` is specifically `RegA:RegB → PCH:PCL`; `GETPC` is specifically the reverse transfer. `RegC:RegD` is not implicitly involved in either operation.
+
+Failed conditional escapes may assert the existing `CYCLE_RESET` line at `T2` because `ZF` and `CF` belong to the preceding instruction and are already stable. The condition decision must be held long enough for the reset pulse to be recognized.
 
 ### IRQ Ownership and Vector Source
 
-The IRQ card owns the request state, not the interrupt-call sequence. Its
-interface to the central control logic is:
+
+
+An incoming hardware interrupt request sets `ir_pending`. At $T_0$ (instruction boundary), if interrupts are enabled ($IE = 1$), Central Control detects `ir_pending`, forces a `NOP` on the instruction bus (via `IR_DISABLE`), and executes an interrupt call sequence.
+
+The IRQ interface signals with central control are:
 
 ```text
-IRQ_PENDING / IRQ_REQUEST
+ir_pending / IRQ_REQUEST
 IR_DISABLE
 PC_INC_DISABLE
 IRQ_VECTOR[7:0]
+
 ```
 
-When an enabled request is accepted at the instruction boundary, `IR_DISABLE`
-disconnects the IR outputs. Because NOD-4 uses passive logical zero, the
-opcode and operand rails then appear as `NOP`. `PC_INC_DISABLE` keeps the
-already-correct next-instruction PC stable while the main decoder performs the
-normal two-cycle `PC_TO_STACK` operation.
+When an enabled request is accepted at $T_0$, `IR_DISABLE` disconnects the IR outputs. Because NOD-4 uses passive logical zero, the opcode and operand rails then appear as `NOP`. `PC_INC_DISABLE` keeps the already-correct next-instruction PC stable while the main decoder performs the normal two-cycle `PC_TO_STACK` operation.
 
-The main decoder then performs the complete IRQ sequence:
+The main decoder then performs the complete IRQ call sequence:
 
 ```text
 PC_TO_STACK
 IE_CLEAR
 IRQ_VECTOR_TO_PC
+
 ```
 
-The IRQ card supplies the vector value, selected by DIP switches or equivalent
-vector hardware. The vector must remain stable throughout the vector-load
-phase. The target may be ROM, RAM, or MMIO; a RAM target can contain a
-software-configurable IRQ trampoline. The IRQ card does not need to own the
-T-step sequencer or parallel the normal OE/WE controls.
+The IRQ card supplies the vector value, selected by DIP switches or equivalent vector hardware. The vector must remain stable throughout the vector-load phase. The target may be ROM, RAM, or MMIO; a RAM target can contain a software-configurable IRQ trampoline. The IRQ card does not need to own the T-step sequencer or parallel the normal OE/WE controls.
