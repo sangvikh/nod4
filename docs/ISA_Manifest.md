@@ -310,6 +310,11 @@ IE        (Pin 09) ───────────┐
 
 5. **Vector Hijack & Return:** Return address `PCH:PCL` is saved to `STACK`, execution jumps to vector `0xF2`, and executing `RETI` restores `IE ← 1` (Pin 09 returns HIGH). Ordinary `RET` preserves `IE`.
 
+At the instruction-boundary takeover point (`T0`, called `T1` in the
+one-indexed timing tables), the PC already contains the next instruction
+address. IRQ therefore inhibits the normal PC increment while saving the
+return address; it does not increment the PC again.
+
 
 
 ---
@@ -494,7 +499,22 @@ The hardware return stack operates as **Ascending Empty (AE)**: `SP` points to t
 
 * **Return & Keep Stack (`RETK`):** Performs the normal two-nibble pop, then increments `SP` twice during phase 2. Net stack-pointer change is zero.
 
-The same stack convention is used by ordinary `CALL` and hardware IRQ entry. `RET` preserves `IE`; `RETI` sets `IE` after restoring the PC.
+The same stack convention is used by ordinary `CALL` and hardware IRQ entry.
+`RET` preserves `IE`; `RETI` sets `IE` after restoring the PC. The apparent
+`PCL`-then-`PCH` order during POP is a consequence of the ascending-empty
+stack; the stored return address remains `PCH:PCL`.
+
+The physical two-cycle sequences are authoritative:
+
+```text
+PUSH (CALL, PUSHPC, SWI, IRQ):
+    Tn:   STACK[SP] ← PCH ; SP ← SP + 1
+    Tn+1: STACK[SP] ← PCL ; SP ← SP + 1
+
+POP (RET, RETI, RETK):
+    Tn:   SP ← SP - 1 ; PCL ← STACK[SP]
+    Tn+1: SP ← SP - 1 ; PCH ← STACK[SP]
+```
 
 
 
@@ -743,7 +763,7 @@ When operating in **Arithmetic Mode (`EXT = 0`)**, bit `opr[0]` acts as a dual-f
 | **Q3: Immediate ALU** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Sample `#imm1` / `EXT` $\rightarrow$ ALU Input B | Drive `~OE2[dst]` $\rightarrow$ `Latch_A` | Compute Result | Write `ALU_OUT` $\rightarrow$ `dst`, Sample Flags
 
  |
-| **Hardware Interrupt** | Freeze `PC`, Force `NOP` | Fetch `NOP` Payload | Push $PCL_{\text{return}} \rightarrow$ STACK | Push $PCH_{\text{return}} \rightarrow$ STACK, Pulse `~IRQ_ACK` (Pin 06) | Clear $IE \leftarrow 0$ (Pin 09 LOW) | Load Vector `0xF2` $\rightarrow PCH:PCL$<br> |
+| **Hardware Interrupt** | Freeze `PC`, Force `NOP` | Fetch `NOP` Payload | Push $PCH_{\text{return}} \rightarrow$ STACK | Push $PCL_{\text{return}} \rightarrow$ STACK, Pulse `~IRQ_ACK` (Pin 06) | Clear $IE \leftarrow 0$ (Pin 09 LOW) | Load Vector `0xF2` $\rightarrow PCH:PCL$<br> |
 
 ---
 
