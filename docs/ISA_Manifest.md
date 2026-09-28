@@ -10,6 +10,8 @@
 
 **Logic Standard:** Active-LOW discrete 2N7000 NMOS pass-transistors and passive pull-up resistors to $+5\text{V}$.
 
+Logic levels: 5v = 0, 0v = 1.
+
 ---
 
 ## 1. Electrical Standard, Clocking & Latch Mechanics
