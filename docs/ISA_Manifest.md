@@ -308,7 +308,12 @@ IE        (Pin 09) ───────────┐
 4. **Peripheral Release:** The active-LOW pulse on `~IRQ_ACK` signals the peripheral to immediately release `~IRQ` (Pin 05).
 
 
-5. **Vector Hijack & Return:** Return address `PCH:PCL` is saved to `STACK`, execution jumps to vector `0xF2`, and executing `RETI` restores `IE ← 1` (Pin 09 returns HIGH). Ordinary `RET` preserves `IE`.
+5. **Vector Hijack & Return:** Return address `PCH:PCL` is saved to `STACK`, execution jumps to the externally supplied IRQ vector, and executing `RETI` restores `IE ← 1` (Pin 09 returns HIGH). Ordinary `RET` preserves `IE`.
+
+The IRQ vector is an 8-bit value supplied by the IRQ card or its associated
+vector hardware. DIP switches may select the vector address. The selected
+address may point to ROM, RAM, or MMIO; a RAM target can therefore contain a
+software-configurable IRQ trampoline.
 
 At the instruction-boundary takeover point (`T0`, called `T1` in the
 one-indexed timing tables), the PC already contains the next instruction
@@ -411,8 +416,11 @@ combinations of them rather than unrelated special cases.
 | `STACK_TO_PC` | `STACK → PCH:PCL` |
 | `TARGET_TO_PC` | `RegA:RegB → PCH:PCL` |
 | `PC_TO_TARGET` | `PCH:PCL → RegA:RegB` |
+| `SWI_VECTOR_TO_PC` | Fixed SWI vector → `PCH:PCL` |
+| `IRQ_VECTOR_TO_PC` | External `IRQ_VECTOR[7:0]` → `PCH:PCL` |
 | `PC_INC` | `PC ← PC + 2` |
 | `IE_SET` | `IE ← 1` |
+| `IE_CLEAR` | `IE ← 0` |
 | `SP_RESTORE` | `SP ← SP + 2` |
 
 The paired control-pointer transfers are explicit: `JU` is `RegA:RegB →
@@ -429,7 +437,8 @@ PUSHPC = PC_TO_STACK
 RET    = STACK_TO_PC
 RETI   = STACK_TO_PC + IE_SET
 RETK   = STACK_TO_PC + SP_RESTORE
-SWI    = PC_TO_STACK + VECTOR_TO_PC
+SWI    = PC_TO_STACK + SWI_VECTOR_TO_PC
+IRQ    = PC_TO_STACK + IE_CLEAR + IRQ_VECTOR_TO_PC
 ```
 
 ##### Direct Bitmapped Control Bit Allocations
@@ -453,7 +462,10 @@ $$\text{Control Vector} = \big[\, \underbrace{d_1}_{\text{Stack Enable}} \,,\, \
 * **`c1` (`OPERAND[3]` — Phase 2 Action / Flag Select):** Selects Phase 2 bus drive mode, or chooses condition flag (`0` = $ZF$, `1` = $CF$).
 
 
-* **`c0` (`OPERAND[2]` — Target Modifier / AE Restore Select):** Selects address drive target (`0` = `RegA:RegB`, `1` = Vector `0xF2`), condition invert, or $SP$ restore enable for `RETK`.
+* **`c0` (`OPERAND[2]` — Target Modifier / AE Restore Select):** Selects
+  address-drive target (`0` = `RegA:RegB`, `1` = the fixed SWI vector),
+  condition invert, or $SP$ restore enable for `RETK`. Hardware IRQ entry
+  uses the separate externally supplied `IRQ_VECTOR` source.
 
 
 
@@ -479,7 +491,9 @@ Operations execute across time-step slots with standard micro-step resets ($T_2$
 * **Phase 1 ($T_3, T_4$):** Handles Stack operations (Push / Pop) or Flag condition sampling. Single-phase subops reset at $T_4$.
 
 
-* **Phase 2 ($T_5, T_6$):** Drives address vectors (`RegA:RegB` or Vector `0xF2`), or performs $SP$ Ascending Empty restores (`RETK`). Multi-phase subops reset at $T_6$.
+* **Phase 2 ($T_5, T_6$):** Drives address vectors (`RegA:RegB`, the fixed
+  SWI vector, or the externally supplied `IRQ_VECTOR`), or performs $SP$
+  Ascending Empty restores (`RETK`). Multi-phase subops reset at $T_6$.
 
 
 
@@ -558,7 +572,7 @@ dd = 11 (RegD) JU     (0x33)   CALL   (0x37)   PUSHPC (0x3B)   SWI    (0x3F)
 | `00_11 0011` | **`0x33`** | **`JU`** | **Drive Target AB** (`RegA:RegB` $\rightarrow PC$) | Idle Phase 2 | **4** | **$T_4$** | 0 |
 | `00_11 0111` | **`0x37`** | **`CALL`** | **PUSH Sequence** ($PC \rightarrow \text{Stack}$, $SP++$) | **Drive Target AB** (`RegA:RegB` $\rightarrow PC$) | **6** | **$T_6$ (Natural)** | **$+2$** |
 | `00_11 1011` | **`0x3B`** | **`PUSHPC`** | **PUSH Sequence** ($PC \rightarrow \text{Stack}$, $SP++$) | Idle Phase 2 | **4** | **$T_4$** | **$+2$** |
-| `00_11 1111` | **`0x3F`** | **`SWI`** | **PUSH Sequence** ($PC \rightarrow \text{Stack}$, $SP++$) | **Drive Target Vector** (Vector `0xF2` $\rightarrow PC$) | **6** | **$T_6$ (Natural)** | **$+2$** |
+| `00_11 1111` | **`0x3F`** | **`SWI`** | **PUSH Sequence** ($PC \rightarrow \text{Stack}$, $SP++$) | **Drive SWI Vector** (fixed vector $\rightarrow PC$) | **6** | **$T_6$ (Natural)** | **$+2$** |
 
 ---
 
@@ -763,7 +777,7 @@ When operating in **Arithmetic Mode (`EXT = 0`)**, bit `opr[0]` acts as a dual-f
 | **Q3: Immediate ALU** | Assert `PC` $\rightarrow$ ADDR | Fetch Opcode $\rightarrow$ `IR` | Sample `#imm1` / `EXT` $\rightarrow$ ALU Input B | Drive `~OE2[dst]` $\rightarrow$ `Latch_A` | Compute Result | Write `ALU_OUT` $\rightarrow$ `dst`, Sample Flags
 
  |
-| **Hardware Interrupt** | Freeze `PC`, Force `NOP` | Fetch `NOP` Payload | Push $PCH_{\text{return}} \rightarrow$ STACK | Push $PCL_{\text{return}} \rightarrow$ STACK, Pulse `~IRQ_ACK` (Pin 06) | Clear $IE \leftarrow 0$ (Pin 09 LOW) | Load Vector `0xF2` $\rightarrow PCH:PCL$<br> |
+| **Hardware Interrupt** | Freeze `PC`, assert `IR_DISABLE`, inhibit `PC_INC` | Passive NOP / IRQ acceptance | Push $PCH_{\text{return}} \rightarrow$ STACK | Push $PCL_{\text{return}} \rightarrow$ STACK, Pulse `~IRQ_ACK` (Pin 06) | Clear $IE \leftarrow 0$ (Pin 09 LOW) | Load external `IRQ_VECTOR` $\rightarrow PCH:PCL$<br> |
 
 ---
 
@@ -815,3 +829,35 @@ Failed conditional escapes may assert the existing `CYCLE_RESET` line at `T2`
 because `ZF` and `CF` belong to the preceding instruction and are already
 stable. The condition decision must be held long enough for the reset pulse to
 be recognized.
+
+### IRQ Ownership and Vector Source
+
+The IRQ card owns the request state, not the interrupt-call sequence. Its
+interface to the central control logic is:
+
+```text
+IRQ_PENDING / IRQ_REQUEST
+IR_DISABLE
+PC_INC_DISABLE
+IRQ_VECTOR[7:0]
+```
+
+When an enabled request is accepted at the instruction boundary, `IR_DISABLE`
+disconnects the IR outputs. Because NOD-4 uses passive logical zero, the
+opcode and operand rails then appear as `NOP`. `PC_INC_DISABLE` keeps the
+already-correct next-instruction PC stable while the main decoder performs the
+normal two-cycle `PC_TO_STACK` operation.
+
+The main decoder then performs the complete IRQ sequence:
+
+```text
+PC_TO_STACK
+IE_CLEAR
+IRQ_VECTOR_TO_PC
+```
+
+The IRQ card supplies the vector value, selected by DIP switches or equivalent
+vector hardware. The vector must remain stable throughout the vector-load
+phase. The target may be ROM, RAM, or MMIO; a RAM target can contain a
+software-configurable IRQ trampoline. The IRQ card does not need to own the
+T-step sequencer or parallel the normal OE/WE controls.
