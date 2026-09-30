@@ -11,13 +11,13 @@ The architecture combines a 4-bit datapath with 8-bit pointers and a six-step mi
 ## Key Features
 
 - 4-bit cumulative ALU and register datapath
-- 8-bit unified address space assembled from two 4-bit nibbles
+- 8-bit unified address space addressing 256 4-bit nibbles
 - Sequential dual-nibble fetch:
   - `T0`: opcode nibble
   - `T1`: operand nibble
 - Six-step, 0-indexed microcycle from `T0` through `T5`
 - Separate control-target and data-memory pointers
-- Dedicated 16-nibble ascending-empty hardware return stack
+- Dedicated ascending-empty hardware return stack, typically up to 8 nibbles deep
 - Two register banks selected through the operand nibble
 - Conditional skip instructions with zero-overhead flag branching
 - Hardware interrupt request, acknowledge, vectoring, and return protocol
@@ -32,7 +32,7 @@ The architecture combines a 4-bit datapath with 8-bit pointers and a six-step mi
 | System register bank | 4 × 4-bit | Memory port, stack port, stack pointer, and flags |
 | Control target pointer | 8-bit | `RegA:RegB` / `CPH:CPL` for jumps and calls |
 | Data-memory pointer | 8-bit | `RegC:RegD` / `DPH:DPL` for external RAM access |
-| Hardware stack | 16 nibbles | Return-address storage, independent of external RAM |
+| Hardware stack | Implementation-dependent | Return-address storage, independent of external RAM |
 | Instruction format | 2 nibbles | Opcode followed by operand |
 | Microcycle | 6 steps | Fetch, execute, writeback, and reset timing |
 
@@ -64,8 +64,6 @@ NOD-4 fetches one opcode nibble and one operand nibble per instruction.
 Opcode:  [ IMM | ALU_EN | dst1 | dst0 ]
 Operand: [ SYS | ADD/SUB or Unary | EXT | IMM1/SubOp ]
 ```
-
-The opcode selects one of four quadrants:
 
 | Quadrant | Opcode | Purpose |
 | --- | --- | --- |
@@ -102,10 +100,10 @@ Each instruction progresses through a six-step microcycle:
 | --- | --- |
 | `T0` | Fetch opcode into the instruction register |
 | `T1` | Fetch operand into the instruction register |
-| `T2` | Phase 1, step 1: source/destination read, latch, or stack action |
-| `T3` | Phase 1, step 2: second nibble action or conditional decision |
-| `T4` | Phase 2, step 1: writeback, vectoring, or flag update |
-| `T5` | Phase 2, step 2 and asynchronous sequencer reset |
+| `T2` | Phase 1, step 1: source/destination transfer or first stack nibble |
+| `T3` | Phase 1, step 2: second nibble transfer or second stack nibble |
+| `T4` | Phase 2, step 1: ALU writeback, flag-master update, or vector high nibble |
+| `T5` | Phase 2, step 2: vector low nibble, final restore, and sequencer reset |
 
 The design uses level-sensitive writes gated by `CLK LOW`. Transparent latch contents become frozen on the rising clock edge, providing a defined data setup and latch window.
 
@@ -118,7 +116,7 @@ The return stack uses an ascending-empty convention:
 - A two-nibble address adjustment consumes two micro-steps.
 - `RETK` restores the stack pointer after reading a return address.
 
-This asymmetric decode avoids an additional pre-decrement delay during stack reads.
+The physical stack depth is an implementation choice. A practical implementation may use up to eight nibbles, with the unused or high stack-pointer bit available for underflow/overflow indication.
 
 ## Flags and Branching
 
@@ -133,14 +131,34 @@ This asymmetric decode avoids an additional pre-decrement delay during stack rea
 
 `SHR RegFLAGS` and `RCR RegFLAGS` eject the user flag into carry. The following `SC` or `SNC` instruction can then conditionally skip in one cycle, enabling compact flag-driven control flow.
 
+`CF` and `ZF` are committed to the master flag latch during ALU writeback at `T4`. The slave flag latch becomes visible only after the writeback window, preventing flag feedback or race conditions during the same ALU operation.
+
 ## Interrupt Protocol
 
 The hardware interrupt interface uses two active-low signals:
 
 - `~IRQ`: peripheral request input
-- `~IRQ_ACK`: CPU acknowledgement output
+- `~IRQ_ACK`: CPU acknowledgement level
 
-When interrupts are enabled, the processor isolates the instruction bus, preserves the return program counter, pushes the return address, emits an acknowledgement pulse, clears `IE`, and loads the external interrupt vector. `RETI` restores the return address and re-enables interrupts.
+When `IE = 1` and no interrupt is active, the IRQ card asynchronously captures the request in its master latch. At the next `T0` boundary, the request transfers to the slave latch as `IRQ_ACTIVE`.
+
+At `T0`, `IRQ_ACTIVE`:
+
+1. inhibits the normal PC increment;
+2. disables the instruction-register outputs, causing passive `NOP` decode;
+3. clears `IE`;
+4. causes the main decoder to enter the IRQ sequence.
+
+The IRQ entry sequence then:
+
+- `T2`: pushes `PCH` to the stack;
+- `T3`: pushes `PCL` to the stack;
+- `T4`: loads the external vector high nibble into `PCH`;
+- `T5`: loads the external vector low nibble into `PCL`.
+
+`IRQ_ACTIVE` drives the external active-low `~IRQ_ACK` line through an inverter. The acknowledgement remains asserted throughout IRQ entry and releases after `T5`, when the IRQ master/slave latch reset sequence completes.
+
+`RETI` restores the return address and sets `IE`. Ordinary `RET` preserves `IE`. `SWI` does not modify `IE`, so it can be used either with interrupts enabled or as a polling/trap mechanism while interrupts are disabled.
 
 ## Hardware Interface
 
