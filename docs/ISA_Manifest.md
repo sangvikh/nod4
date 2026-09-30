@@ -6,7 +6,7 @@
 
 **Fetch Mechanics:** Sequential Dual-Nibble Fetch (`OPCODE[3:0]` at $T_0$, `OPERAND[3:0]` at $T_1$)
 
-**Physical Hierarchy:** 32-Pin Master Backplane Bus $\rightarrow$ Universal Base Cards (UBC) $\rightarrow$ Control Harnesses $\rightarrow$ Central Control Board (CCB) & Daughtercards
+**Physical Hierarchy:** 32-Pin Master Backplane Bus $→$ Universal Base Cards (UBC) $→$ Control Harnesses $→$ Central Control Board (CCB) & Daughtercards
 
 **Logic Standard:** Active-LOW discrete 2N7000 NMOS pass-transistors and passive pull-up resistors to +5V. Logic levels: 5V = 0 (inactive/pull-up), 0V = 1 (active/NMOS pull-down).
 
@@ -14,7 +14,7 @@
 
 ## 1. Electrical Standard, Clocking & Latch Mechanics
 
-The NOD-4 operates on a 6-step 0-indexed micro-step sequence ($T_0 \dots T_5$) driven by the falling edge of the master clock (`CLK`).
+The NOD-4 operates on a 6-step 0-indexed micro-step sequence ($T_0 … T_5$) driven by the falling edge of the master clock (`CLK`).
 
 ```text
                 PHASE 1: SETUP & DRIVE                PHASE 2: LATCH WINDOW
@@ -35,13 +35,13 @@ LATCH_ENABLE ──────────────────────�
 
 ### Level-Sensitive Write, OE/WE & Asynchronous Reset Rules
 
-* **Output Enable ($\text{OE}$):** Asserts continuously across the active $T$-state step to allow passive pull-ups and dynamic bus capacitance ($C_g$) to charge and settle completely.
-* **Write Enable ($\text{WE}$):** Strictly gated by **`CLK` LOW** ($\text{T\_step} \cdot \overline{\text{CLK}}$) to eliminate write-glitches, enforce data setup time, and freeze transparent latch contents on the **`CLK` rising edge** as `CLK` transitions from LOW to HIGH.
+* **Output Enable ($OE$):** Asserts continuously across the active $T$-state step to allow passive pull-ups and dynamic bus capacitance ($C_g$) to charge and settle completely.
+* **Write Enable ($WE$):** Strictly gated by **`CLK` LOW** ($T\_step · ~CLK$) to eliminate write-glitches, enforce data setup time, and freeze transparent latch contents on the **`CLK` rising edge** as `CLK` transitions from LOW to HIGH.
 * **Asynchronous Next-State Reset Rule:** All instruction-driven sequencer resets trigger asynchronously upon entering the **next** (otherwise unused) $T$-state step. An operation concluding its execution phase in $T_n$ asserts the asynchronous reset at the start of $T_{n+1}$, recycling the ring counter back to $T_0$.
 
-$$\text{LATCH\_ENABLE}_n = \overline{\text{\textasciitilde WE}_n} \lor \text{CLK}$$
+$$LATCH\_ENABLE_n = ~~ WE_n \lor CLK$$
 
-$$\overline{\text{LATCH\_ENABLE}_n} = \text{\textasciitilde WE}_n \cdot \overline{\text{CLK}}$$
+$$~LATCH\_ENABLE_n = ~ WE_n · ~CLK$$
 
 ---
 
@@ -100,16 +100,16 @@ Constructed using Master-Slave Universal Bit Cells (UBC) to prevent race conditi
 
 1. **`RegA:RegB` / `CPH:CPL` (Control Target Pointer):** Persistent 8-bit target vector (formed by two 4-bit nibbles `CPH` and `CPL`) for `CALL [RegA:RegB]` and jumps without altering its contents or disturbing `RegC:RegD`.
 2. **`RegC:RegD` / `DPH:DPL` (Data Memory Pointer):** Drives active 8-bit address bus (`ADDR_H[3:0]`, `ADDR_L[3:0]`) using 4-bit upper nibble `DPH` and 4-bit lower nibble `DPL` whenever `MEM` is referenced.
-3. **`SP` (Hardware Stack Pointer & Asymmetric Decoded Stack Controller):** Points to a dedicated internal 16-nibble **Ascending Empty (AE)** return stack (independent from 256 $\times$ 4-bit RAM).
+3. **`SP` (Hardware Stack Pointer & Asymmetric Decoded Stack Controller):** Points to a dedicated internal 16-nibble **Ascending Empty (AE)** return stack (independent from 256 $×$ 4-bit RAM).
 * **Hardware Address Decoding Scheme:** To eliminate pre-decrement delay cycles during stack reads, the Stack Controller Card decodes control lines directly as:
-* **Write Enable ($\text{WE}$):** Decoded directly to location **$\text{SP}$** ($\text{STACK}[\text{SP}] \leftarrow \text{Data}$).
-* **Output Enable ($\text{OE}$):** Decoded directly to location **$\text{SP} - 1$** ($\text{Data} \leftarrow \text{STACK}[\text{SP} - 1]$).
+* **Write Enable ($WE$):** Decoded directly to location **$SP$** ($STACK[SP] ← Data$).
+* **Output Enable ($OE$):** Decoded directly to location **$SP - 1$** ($Data ← STACK[SP - 1]$).
 
 
-* **2-Step Pointer Adjustments (1 T-step per single-nibble adjustment):** Modifying $\text{SP}$ by two 4-bit nibbles consumes **2 $T$-steps**:
-* **Push Sequence (Phase 1: $T_2, T_3$):** Writes upper/lower nibbles to $\text{STACK}[\text{SP}]$ ($\text{WE}$ at $\text{SP}$) with sequential increments ($T_2: \text{SP} \leftarrow \text{SP} + 1$; $T_3: \text{SP} \leftarrow \text{SP} + 1$).
-* **Pop Sequence (Phase 1: $T_2, T_3$):** Reads upper/lower nibbles from $\text{STACK}[\text{SP}-1]$ ($\text{OE}$ at $\text{SP}-1$) with sequential decrements ($T_2: \text{SP} \leftarrow \text{SP} - 1$; $T_3: \text{SP} \leftarrow \text{SP} - 1$).
-* **`RETK` (Return & Keep) Restore (Phase 2: $T_4, T_5$):** Following a two-nibble pop in $T_2, T_3$, phase 2 executes two sequential single-step increments ($T_4: \text{SP} \leftarrow \text{SP} + 1$; $T_5: \text{SP} \leftarrow \text{SP} + 1$), restoring $\text{SP}$ back to its initial offset.
+* **2-Step Pointer Adjustments (1 T-step per single-nibble adjustment):** Modifying $SP$ by two 4-bit nibbles consumes **2 $T$-steps**:
+* **Push Sequence (Phase 1: $T_2, T_3$):** Writes upper/lower nibbles to $STACK[SP]$ ($WE$ at $SP$) with sequential increments ($T_2: SP ← SP + 1$; $T_3: SP ← SP + 1$).
+* **Pop Sequence (Phase 1: $T_2, T_3$):** Reads upper/lower nibbles from $STACK[SP-1]$ ($OE$ at $SP-1$) with sequential decrements ($T_2: SP ← SP - 1$; $T_3: SP ← SP - 1$).
+* **`RETK` (Return & Keep) Restore (Phase 2: $T_4, T_5$):** Following a two-nibble pop in $T_2, T_3$, phase 2 executes two sequential single-step increments ($T_4: SP ← SP + 1$; $T_5: SP ← SP + 1$), restoring $SP$ back to its initial offset.
 
 
 
@@ -121,18 +121,18 @@ Constructed using Master-Slave Universal Bit Cells (UBC) to prevent race conditi
 
 Bit `opr[3]` sets destination bank (`DST_SYS`), and `opr[2]` sets source bank (`SRC_SYS`):
 
-$$\text{Full Destination Register Address} = [\text{opr[3]}, \text{opr[1:0]}]$$
+$$Full Destination Register Address = [opr[3], opr[1:0]]$$
 
-$$\text{Full Source Register Address} = [\text{opr[2]}, \text{opr[1:0]}]$$
+$$Full Source Register Address = [opr[2], opr[1:0]]$$
 
 * **Phase-Gated `SYS_SEL` Line:** Asserted with `opr[2]` during $T_2$ (Source Read), and switched to `opr[3]` during writeback.
 
 | `opr[3]` (`DST`) | `opr[2]` (`SRC`) | Mode | Source Bank | Destination Bank | Mnemonic | Active Steps | Asynchronous Reset Step |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **`0`** | **`0`** | **Gen $\rightarrow$ Gen** | General (`RegA`–`RegD`) | General (`RegA`–`RegD`) | `MOV RegA, RegB` | $T_0 \dots T_2$ | Resets asynchronously at $T_3$ |
-| **`0`** | **`1`** | **Sys $\rightarrow$ Gen** | System (`MEM`–`RegFLAGS`) | General (`RegA`–`RegD`) | `MOV RegA, MEM` | $T_0 \dots T_2$ | Resets asynchronously at $T_3$ |
-| **`1`** | **`0`** | **Gen $\rightarrow$ Sys** | General (`RegA`–`RegD`) | System (`MEM`–`RegFLAGS`) | `MOV MEM, RegA` | $T_0 \dots T_2$ | Resets asynchronously at $T_3$ |
-| **`1`** | **`1`** | **Sys $\rightarrow$ Sys** | System (`MEM`–`RegFLAGS`) | System (`MEM`–`RegFLAGS`) | `MOV STACK, MEM` | $T_0 \dots T_2$ | Resets asynchronously at $T_3$ |
+| **`0`** | **`0`** | **Gen $→$ Gen** | General (`RegA`–`RegD`) | General (`RegA`–`RegD`) | `MOV RegA, RegB` | $T_0 … T_2$ | Resets asynchronously at $T_3$ |
+| **`0`** | **`1`** | **Sys $→$ Gen** | System (`MEM`–`RegFLAGS`) | General (`RegA`–`RegD`) | `MOV RegA, MEM` | $T_0 … T_2$ | Resets asynchronously at $T_3$ |
+| **`1`** | **`0`** | **Gen $→$ Sys** | General (`RegA`–`RegD`) | System (`MEM`–`RegFLAGS`) | `MOV MEM, RegA` | $T_0 … T_2$ | Resets asynchronously at $T_3$ |
+| **`1`** | **`1`** | **Sys $→$ Sys** | System (`MEM`–`RegFLAGS`) | System (`MEM`–`RegFLAGS`) | `MOV STACK, MEM` | $T_0 … T_2$ | Resets asynchronously at $T_3$ |
 
 ---
 
@@ -196,12 +196,12 @@ IE        (Pin 09) ───────────┐
 
 1. **Assertion:** Peripheral pulls `~IRQ` LOW (Pin 05), setting internal `ir_pending`.
 2. **Takeover & Bus Isolation ($T_0$):** At instruction boundary $T_0$, if $IE = 1$, Central Control asserts `IR_DISABLE` (forcing `NOP` on instruction lines via passive pull-down) and asserts `PC_INC_DISABLE` to hold current return PC stable.
-3. **Execution & Acknowledgment ($T_2 \dots T_5$):**
-* Phase 1 ($T_2, T_3$): CPU pushes return address `PCH:PCL` to `STACK` ($T_2: \text{STACK}[\text{SP}] \leftarrow \text{PCH}$, $T_3: \text{STACK}[\text{SP}] \leftarrow \text{PCL}$), and Central Control drives a 1 $T$-step active-LOW pulse on `~IRQ_ACK` (Pin 06) at $T_3$.
-* Phase 2 ($T_4, T_5$): Clears $IE \leftarrow 0$ (Pin 09 goes LOW) at $T_4$, and loads external hardware vector `IRQ_VECTOR[7:0] → PCH:PCL` at $T_5$. Resets asynchronously at $T_0$.
+3. **Execution & Acknowledgment ($T_2 … T_5$):**
+* Phase 1 ($T_2, T_3$): CPU pushes return address `PCH:PCL` to `STACK` ($T_2: STACK[SP] ← PCH$, $T_3: STACK[SP] ← PCL$), and Central Control drives a 1 $T$-step active-LOW pulse on `~IRQ_ACK` (Pin 06) at $T_3$.
+* Phase 2 ($T_4, T_5$): Clears $IE ← 0$ (Pin 09 goes LOW) at $T_4$, and loads external hardware vector `IRQ_VECTOR[7:0] → PCH:PCL` at $T_5$. Resets asynchronously at $T_0$.
 
 
-4. **Release & Return:** Peripheral detects `~IRQ_ACK` pulse and releases `~IRQ`. Executing `RETI` pops return address and restores $IE \leftarrow 1$.
+4. **Release & Return:** Peripheral detects `~IRQ_ACK` pulse and releases `~IRQ`. Executing `RETI` pops return address and restores $IE ← 1$.
 
 ---
 
@@ -222,7 +222,7 @@ IE        (Pin 09) ───────────┐
 
 ### Quadrant 0: Data Moves & Diagonal Control Escapes (`OPCODE = 00_dd`)
 
-#### 1. Standard Moves ($dd \neq ss$)
+#### 1. Standard Moves ($dd ≠ ss$)
 
 Executes standard transfers in $T_2$. **Resets asynchronously at $T_3$**.
 
@@ -230,9 +230,9 @@ Executes standard transfers in $T_2$. **Resets asynchronously at $T_3$**.
 
 When $dst[1:0] == src[1:0]$, standard register decoders are suppressed and the 4 active control bits ($d_1, d_0$ from `OPCODE[1:0]` and $c_1, c_0$ from `OPERAND[3:2]`) drive the control matrix directly.
 
-$$\text{ESCAPE\_EN} = \text{IS\_Q0} \cdot (dd_1 \odot ss_1) \cdot (dd_0 \odot ss_0)$$
+$$ESCAPE\_EN = IS\_Q0 · (dd_1 ⊙ ss_1) · (dd_0 ⊙ ss_0)$$
 
-$$\text{Control Vector} = [d_1 (\text{Stack En}),\, d_0 (\text{Jump/Seq}),\, c_1 (\text{Action/Flag}),\, c_0 (\text{Target/Mod})]$$
+$$Control Vector = [d_1 (Stack En),\, d_0 (Jump/Seq),\, c_1 (Action/Flag),\, c_0 (Target/Mod)]$$
 
 ##### Master Q0 Diagonal Decode Matrix & Timing Schedule
 
@@ -240,44 +240,44 @@ All escapes fetch opcode at $T_0$ and operand at $T_1$. Flag conditions are eval
 
 | Hex Code | Mnemonic | $d_1 d_0 c_1 c_0$ | Active Phase 1 ($T_2, T_3$) | Active Phase 2 ($T_4, T_5$) | Active Steps | Asynchronous Reset Step | Net $\Delta SP$ |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **`0x00`** | **`NOP`** | `0 0 0 0` | Passive Idle | Passive Idle | $T_0 \dots T_5$ | Resets asynchronously at $T_0$ (Natural $T_5$) | 0 |
-| **`0x04`** | **`SKP`** | `0 0 0 1` | `PC_INC` ($PC \leftarrow PC + 2$) | Idle | $T_0 \dots T_3$ | Resets asynchronously at $T_4$ | 0 |
-| **`0x08`** | **`GETPC`** | `0 0 1 0` | `PCH:PCL → RegA:RegB` | Idle | $T_0 \dots T_3$ | Resets asynchronously at $T_4$ | 0 |
-| **`0x0C`** | **`SRESET`** | `0 0 1 1` | Assert System Reset Rail | Idle | $T_0 \dots T_2$ | Resets asynchronously at $T_3$ | 0 |
-| **`0x11`** | **`SZ`** | `0 1 0 0` | Match: `PC_INC` ($T_2 \dots T_3$) | Fail: Trigger Reset | True: $T_0 \dots T_3$ / Fail: $T_0 \dots T_1$ | True: $T_4$ / Fail: $T_2$ | 0 |
-| **`0x15`** | **`SNZ`** | `0 1 0 1` | Match: `PC_INC` ($T_2 \dots T_3$) | Fail: Trigger Reset | True: $T_0 \dots T_3$ / Fail: $T_0 \dots T_1$ | True: $T_4$ / Fail: $T_2$ | 0 |
-| **`0x19`** | **`SC`** | `0 1 1 0` | Match: `PC_INC` ($T_2 \dots T_3$) | Fail: Trigger Reset | True: $T_0 \dots T_3$ / Fail: $T_0 \dots T_1$ | True: $T_4$ / Fail: $T_2$ | 0 |
-| **`0x1D`** | **`SNC`** | `0 1 1 1` | Match: `PC_INC` ($T_2 \dots T_3$) | Fail: Trigger Reset | True: $T_0 \dots T_3$ / Fail: $T_0 \dots T_1$ | True: $T_4$ / Fail: $T_2$ | 0 |
-| **`0x22`** | **`RET`** | `1 0 0 0` | `STACK → PCH:PCL` & $SP \leftarrow SP - 2$ | Idle | $T_0 \dots T_3$ | Resets asynchronously at $T_4$ | $-2$ |
-| **`0x26`** | **`RETK`** | `1 0 0 1` | `STACK → PCH:PCL` & $SP \leftarrow SP - 2$ | AE Restore ($SP \leftarrow SP + 2$ in $T_4 \dots T_5$) | $T_0 \dots T_5$ | Resets asynchronously at $T_0$ (Natural $T_5$) | **0** |
-| **`0x2A`** | **`RETI`** | `1 0 1 0` | `STACK → PCH:PCL` & $SP \leftarrow SP - 2$ | $IE \leftarrow 1$ ($T_4$) | $T_0 \dots T_4$ | Resets asynchronously at $T_5$ | $-2$ |
-| **`0x2E`** | **`HALT`** | `1 0 1 1` | Freeze Clock (`HALT_STAT`) | Idle | $T_0 \dots T_2$ | Resets asynchronously at $T_3$ / Halt | 0 |
-| **`0x33`** | **`JU`** | `1 1 0 0` | `RegA:RegB → PCH:PCL` ($T_2 \dots T_3$) | Idle | $T_0 \dots T_3$ | Resets asynchronously at $T_4$ | 0 |
-| **`0x37`** | **`CALL`** | `1 1 0 1` | `PCH:PCL → STACK` & $SP \leftarrow SP + 2$ | `RegA:RegB → PCH:PCL` ($T_4 \dots T_5$) | $T_0 \dots T_5$ | Resets asynchronously at $T_0$ (Natural $T_5$) | $+2$ |
-| **`0x3B`** | **`PUSHPC`** | `1 1 1 0` | `PCH:PCL → STACK` & $SP \leftarrow SP + 2$ | Idle | $T_0 \dots T_3$ | Resets asynchronously at $T_4$ | $+2$ |
-| **`0x3F`** | **`SWI`** | `1 1 1 1` | `PCH:PCL → STACK` & $SP \leftarrow SP + 2$ | Fixed SWI Vector $\rightarrow PC$ ($T_4 \dots T_5$) | $T_0 \dots T_5$ | Resets asynchronously at $T_0$ (Natural $T_5$) | $+2$ |
+| **`0x00`** | **`NOP`** | `0 0 0 0` | Passive Idle | Passive Idle | $T_0 … T_5$ | Resets asynchronously at $T_0$ (Natural $T_5$) | 0 |
+| **`0x04`** | **`SKP`** | `0 0 0 1` | `PC_INC` ($PC ← PC + 2$) | Idle | $T_0 … T_3$ | Resets asynchronously at $T_4$ | 0 |
+| **`0x08`** | **`GETPC`** | `0 0 1 0` | `PCH:PCL → RegA:RegB` | Idle | $T_0 … T_3$ | Resets asynchronously at $T_4$ | 0 |
+| **`0x0C`** | **`SRESET`** | `0 0 1 1` | Assert System Reset Rail | Idle | $T_0 … T_2$ | Resets asynchronously at $T_3$ | 0 |
+| **`0x11`** | **`SZ`** | `0 1 0 0` | Match: `PC_INC` ($T_2 … T_3$) | Fail: Trigger Reset | True: $T_0 … T_3$ / Fail: $T_0 … T_1$ | True: $T_4$ / Fail: $T_2$ | 0 |
+| **`0x15`** | **`SNZ`** | `0 1 0 1` | Match: `PC_INC` ($T_2 … T_3$) | Fail: Trigger Reset | True: $T_0 … T_3$ / Fail: $T_0 … T_1$ | True: $T_4$ / Fail: $T_2$ | 0 |
+| **`0x19`** | **`SC`** | `0 1 1 0` | Match: `PC_INC` ($T_2 … T_3$) | Fail: Trigger Reset | True: $T_0 … T_3$ / Fail: $T_0 … T_1$ | True: $T_4$ / Fail: $T_2$ | 0 |
+| **`0x1D`** | **`SNC`** | `0 1 1 1` | Match: `PC_INC` ($T_2 … T_3$) | Fail: Trigger Reset | True: $T_0 … T_3$ / Fail: $T_0 … T_1$ | True: $T_4$ / Fail: $T_2$ | 0 |
+| **`0x22`** | **`RET`** | `1 0 0 0` | `STACK → PCH:PCL` & $SP ← SP - 2$ | Idle | $T_0 … T_3$ | Resets asynchronously at $T_4$ | $-2$ |
+| **`0x26`** | **`RETK`** | `1 0 0 1` | `STACK → PCH:PCL` & $SP ← SP - 2$ | AE Restore ($SP ← SP + 2$ in $T_4 … T_5$) | $T_0 … T_5$ | Resets asynchronously at $T_0$ (Natural $T_5$) | **0** |
+| **`0x2A`** | **`RETI`** | `1 0 1 0` | `STACK → PCH:PCL` & $SP ← SP - 2$ | $IE ← 1$ ($T_4$) | $T_0 … T_4$ | Resets asynchronously at $T_5$ | $-2$ |
+| **`0x2E`** | **`HALT`** | `1 0 1 1` | Freeze Clock (`HALT_STAT`) | Idle | $T_0 … T_2$ | Resets asynchronously at $T_3$ / Halt | 0 |
+| **`0x33`** | **`JU`** | `1 1 0 0` | `RegA:RegB → PCH:PCL` ($T_2 … T_3$) | Idle | $T_0 … T_3$ | Resets asynchronously at $T_4$ | 0 |
+| **`0x37`** | **`CALL`** | `1 1 0 1` | `PCH:PCL → STACK` & $SP ← SP + 2$ | `RegA:RegB → PCH:PCL` ($T_4 … T_5$) | $T_0 … T_5$ | Resets asynchronously at $T_0$ (Natural $T_5$) | $+2$ |
+| **`0x3B`** | **`PUSHPC`** | `1 1 1 0` | `PCH:PCL → STACK` & $SP ← SP + 2$ | Idle | $T_0 … T_3$ | Resets asynchronously at $T_4$ | $+2$ |
+| **`0x3F`** | **`SWI`** | `1 1 1 1` | `PCH:PCL → STACK` & $SP ← SP + 2$ | Fixed SWI Vector $→ PC$ ($T_4 … T_5$) | $T_0 … T_5$ | Resets asynchronously at $T_0$ (Natural $T_5$) | $+2$ |
 
 ---
 
 ### Quadrant 1: Register-to-Register Binary ALU (`OPCODE = 01_dd`)
 
-Configures the ALU via 2-bit line `alu_op[1:0] = [carry_kill, inv_b]`. Operation target follows $\text{Dst} \leftarrow \text{Dst} + \text{Src}$ (or $\text{Dst} \leftarrow \text{Src} + \text{Dst}$).
+Configures the ALU via 2-bit line `alu_op[1:0] = [carry_kill, inv_b]`. Operation target follows $Dst ← Dst + Src$ (or $Dst ← Src + Dst$).
 
 #### Strict Timestep Execution Sequence:
 
-* **$T_0$:** Fetch Opcode $\rightarrow \text{IR}$
-* **$T_1$:** Fetch Operand $\rightarrow \text{IR}$
-* **$T_2$:** Latch $\text{Dst}$ contents into **Latch A**. Route $\text{Dst}$ address decoder to $\text{Src}$ decoder, then disable $\text{Dst}$ decoder.
-* **$T_3$:** Latch $\text{Src}$ contents into **Latch B**. Keep $\text{Dst}$ decoder disabled.
-* **$T_4$:** Writeback $\text{ALU\_OUT} \rightarrow \text{Dst}$. Disable $\text{Src}$ decoder.
+* **$T_0$:** Fetch Opcode $→ IR$
+* **$T_1$:** Fetch Operand $→ IR$
+* **$T_2$:** Latch $Dst$ contents into **Latch A**. Route $Dst$ address decoder to $Src$ decoder, then disable $Dst$ decoder.
+* **$T_3$:** Latch $Src$ contents into **Latch B**. Keep $Dst$ decoder disabled.
+* **$T_4$:** Writeback $ALU\_OUT → Dst$. Disable $Src$ decoder.
 * **$T_5$:** Asynchronous Sequencer Reset triggers at the start of $T_5$, returning execution state to $T_0$.
 
 | `alu_op[1:0]` | Control `[carry_kill, inv_b]` | Mnemonic | Hardware Logic / Arithmetic Equation | Flags Updated | Active Steps | Asynchronous Reset Step |
 | --- | --- | --- | --- | --- | --- | --- |
-| **`00`** | `[0, 0]` | **`ADD dst, src`** | $dst \leftarrow A (\text{dst}) + B (\text{src}) + C_{in}$ | $ZF, CF$ | $T_0 \dots T_4$ | Resets asynchronously at $T_5$ |
-| **`01`** | `[0, 1]` | **`SUB dst, src`** | $dst \leftarrow A (\text{dst}) + \overline{B (\text{src})} + \overline{C_{in}}$ | $ZF, CF$ | $T_0 \dots T_4$ | Resets asynchronously at $T_5$ |
-| **`10`** | `[1, 0]` | **`XOR dst, src`** | $dst \leftarrow A (\text{dst}) \oplus B (\text{src})$ *(Carry killed)* | $ZF$, $CF \leftarrow 0$ | $T_0 \dots T_4$ | Resets asynchronously at $T_5$ |
-| **`11`** | `[1, 0]` *(Tap Mode)* | **`AND dst, src`** | $dst \leftarrow A (\text{dst}) \land B (\text{src})$ *(Tapped from adder AND gates)* | $ZF$, $CF \leftarrow 0$ | $T_0 \dots T_4$ | Resets asynchronously at $T_5$ |
+| **`00`** | `[0, 0]` | **`ADD dst, src`** | $dst ← A (dst) + B (src) + C_{in}$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| **`01`** | `[0, 1]` | **`SUB dst, src`** | $dst ← A (dst) + ~B (src) + ~C_in$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| **`10`** | `[1, 0]` | **`XOR dst, src`** | $dst ← A (dst) ⊕ B (src)$ *(Carry killed)* | $ZF$, $CF ← 0$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| **`11`** | `[1, 0]` *(Tap Mode)* | **`AND dst, src`** | $dst ← A (dst) ∧ B (src)$ *(Tapped from adder AND gates)* | $ZF$, $CF ← 0$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
 
 ---
 
@@ -287,7 +287,7 @@ Loads 4-bit literal `#imm[3:0]` directly into target $dst[1:0]$ in $T_2$. **Rese
 
 | Binary Pattern | Mnemonic | Hardware Action | Flags | Active Steps | Asynchronous Reset Step |
 | --- | --- | --- | --- | --- | --- |
-| `10_dd #imm` | **`LDI dst, #imm`** | $dst \leftarrow \text{OPERAND}[3:0]$ | None | $T_0 \dots T_2$ | Resets asynchronously at $T_3$ |
+| `10_dd #imm` | **`LDI dst, #imm`** | $dst ← OPERAND[3:0]$ | None | $T_0 … T_2$ | Resets asynchronously at $T_3$ |
 
 ---
 
@@ -297,27 +297,27 @@ Loads 4-bit literal `#imm[3:0]` directly into target $dst[1:0]$ in $T_2$. **Rese
 
 #### Strict Timestep Execution Sequence:
 
-* **$T_0$:** Fetch Opcode $\rightarrow \text{IR}$
-* **$T_1$:** Fetch Operand $\rightarrow \text{IR}$
-* **$T_2$:** Latch $\text{Dst}$ contents into **Latch A**. Route $\text{Dst}$ address decoder to $\text{Src}$ decoder, then disable $\text{Dst}$ decoder.
-* **$T_3$:** Latch Immediate / Constant operand into **Latch B**. Keep $\text{Dst}$ decoder disabled.
-* **$T_4$:** Writeback $\text{ALU\_OUT} \rightarrow \text{Dst}$. Disable $\text{Src}$ decoder.
+* **$T_0$:** Fetch Opcode $→ IR$
+* **$T_1$:** Fetch Operand $→ IR$
+* **$T_2$:** Latch $Dst$ contents into **Latch A**. Route $Dst$ address decoder to $Src$ decoder, then disable $Dst$ decoder.
+* **$T_3$:** Latch Immediate / Constant operand into **Latch B**. Keep $Dst$ decoder disabled.
+* **$T_4$:** Writeback $ALU\_OUT → Dst$. Disable $Src$ decoder.
 * **$T_5$:** Asynchronous Sequencer Reset triggers at the start of $T_5$, returning execution state to $T_0$.
 
 | `opr[3]` (`SYS`) | `opr[2]` | `opr[1]` (`EXT`) | `opr[0]` | Mnemonic | $C_{in}$ Source & $B$-Bus State | Hardware Logic | Flags Updated | Active Steps | Asynchronous Reset Step |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **`0` / `1**` | `0` | **`0`** | `0` | **`ADC dst`** | **$C_{in} \leftarrow CF$**, $B = 0\text{x0}$ | $dst \leftarrow dst + 0 + CF$ | $ZF, CF$ | $T_0 \dots T_4$ | Resets asynchronously at $T_5$ |
-| **`0` / `1**` | `0` | **`0`** | `1` | **`ADDI dst, #1`** | $C_{in}$ static (`inv_b = 1`), $B = 0\text{x1}$ | $dst \leftarrow dst + 1$ | $ZF, CF$ | $T_0 \dots T_4$ | Resets asynchronously at $T_5$ |
-| **`0` / `1**` | `1` | **`0`** | `0` | **`SBB dst`** | **$C_{in} \leftarrow CF$**, $B = 0\text{xF}$ | $dst \leftarrow dst + 0\text{xF} + CF$ | $ZF, CF$ | $T_0 \dots T_4$ | Resets asynchronously at $T_5$ |
-| **`0` / `1**` | `1` | **`0`** | `1` | **`SUBI dst, #1`** | $C_{in}$ static (`inv_b = 1`), $B = 0\text{xE}$ | $dst \leftarrow dst + 0\text{xE}$ | $ZF, CF$ | $T_0 \dots T_4$ | Resets asynchronously at $T_5$ |
-| **`0` / `1**` | `0` | **`1`** | `0` | **`NOT dst`** | Unary Pass Gate | $dst \leftarrow \overline{dst}$ | $ZF$ | $T_0 \dots T_4$ | Resets asynchronously at $T_5$ |
-| **`0` / `1**` | `0` | **`1`** | `1` | **`SHR dst`** | Shift Logic ($0 \rightarrow dst[3]$) | $dst[0] \rightarrow CF$ | $ZF, CF$ | $T_0 \dots T_4$ | Resets asynchronously at $T_5$ |
-| **`0` / `1**` | `1` | **`1`** | `0` | **`RCR dst`** | Shift Logic ($CF \rightarrow dst[3]$) | $dst[0] \rightarrow CF$ | $ZF, CF$ | $T_0 \dots T_4$ | Resets asynchronously at $T_5$ |
-| **`0` / `1**` | `1` | **`1`** | `1` | **`CLR dst`** | ALU Drivers Disabled | $dst \leftarrow 0\text{x0}$ | $ZF \leftarrow 1, CF \leftarrow 0$ | $T_0 \dots T_4$ | Resets asynchronously at $T_5$ |
+| **`0` / `1`**` | `0` | **`0`** | `0` | **`ADC dst`** | **$C_{in} ← CF$**, $B = 0x0$ | $dst ← dst + 0 + CF$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| **`0` / `1`**` | `0` | **`0`** | `1` | **`ADDI dst, #1`** | $C_{in}$ static (`inv_b = 1`), $B = 0x1$ | $dst ← dst + 1$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| **`0` / `1`**` | `1` | **`0`** | `0` | **`SBB dst`** | **$C_{in} ← CF$**, $B = 0xF$ | $dst ← dst + 0xF + CF$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| **`0` / `1`**` | `1` | **`0`** | `1` | **`SUBI dst, #1`** | $C_{in}$ static (`inv_b = 1`), $B = 0xE$ | $dst ← dst + 0xE$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| **`0` / `1`**` | `0` | **`1`** | `0` | **`NOT dst`** | Unary Pass Gate | $dst ← ~dst$ | $ZF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| **`0` / `1`**` | `0` | **`1`** | `1` | **`SHR dst`** | Shift Logic ($0 → dst[3]$) | $dst[0] → CF$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| **`0` / `1`**` | `1` | **`1`** | `0` | **`RCR dst`** | Shift Logic ($CF → dst[3]$) | $dst[0] → CF$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| **`0` / `1`**` | `1` | **`1`** | `1` | **`CLR dst`** | ALU Drivers Disabled | $dst ← 0x0$ | $ZF ← 1, CF ← 0$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
 
 ---
 
-## 6. Master Pipeline & Timestep Schedule ($T_0 \dots T_5$)
+## 6. Master Pipeline & Timestep Schedule ($T_0 … T_5$)
 
 ```text
   T0        T1        T2          T3          T4          T5
@@ -331,11 +331,11 @@ Loads 4-bit literal `#imm[3:0]` directly into target $dst[1:0]$ in $T_2$. **Rese
 
 | Instruction Class | $T_0$ (Fetch Op) | $T_1$ (Fetch Opr) | $T_2$ (Phase 1 Step 1) | $T_3$ (Phase 1 Step 2) | $T_4$ (Phase 2 Step 1) | $T_5$ (Phase 2 Step 2 / Reset) |
 | --- | --- | --- | --- | --- | --- | --- |
-| **Q0: Register Move** | Fetch Opcode $\rightarrow \text{IR}$ | Fetch Operand $\rightarrow \text{IR}$ | Drive Bus & Writeback | Asynchronous Reset at $T_3$ | — | — |
-| **Q0: Memory Access** | Fetch Opcode $\rightarrow \text{IR}$ | Fetch Operand $\rightarrow \text{IR}$ | Drive `RAM[RegC:RegD]` | Asynchronous Reset at $T_3$ | — | — |
-| **Q0: Passive `NOP` (`0x00`)** | Fetch Opcode $\rightarrow \text{IR}$ | Fetch `0x0` Payload | Passive Idle (Buses Off) | Passive Idle (Buses Off) | Passive Idle (Buses Off) | Asynchronous Reset at $T_0$ (Natural $T_5$) |
-| **Q0: Single-Phase Escape** | Fetch Opcode $\rightarrow \text{IR}$ | Fetch Operand $\rightarrow \text{IR}$ | Execute Phase 1 Step 1 | Execute Phase 1 Step 2 | Asynchronous Reset at $T_4$ | — |
-| **Q0: Multi-Phase Escape** | Fetch Opcode $\rightarrow \text{IR}$ | Fetch Operand $\rightarrow \text{IR}$ | Phase 1: Stack Push/Pop ($SP \pm 1$) | Phase 1: Stack Push/Pop ($SP \pm 1$) | Phase 2: Vector / AE Restore ($SP + 1$) | AE Restore ($SP + 1$) / Async Reset @ $T_0$ |
-| **Q1 / Q3: ALU Operations** | Fetch Opcode $\rightarrow \text{IR}$ | Fetch Operand $\rightarrow \text{IR}$ | **Latch $\text{Dst} \rightarrow \text{Latch A}$** (Route $\text{Dst} \rightarrow \text{Src}$ decoder, disable $\text{Dst}$) | **Latch $\text{Src/\#imm} \rightarrow \text{Latch B}$** (Disable $\text{Dst}$ decoder) | **Writeback $\text{ALU\_OUT} \rightarrow \text{Dst}$** (Disable $\text{Src}$ decoder) | Asynchronous Reset at $T_5$ |
-| **Q2: Load Immediate** | Fetch Opcode $\rightarrow \text{IR}$ | Fetch Immediate $\rightarrow \text{IR}$ | Drive `#imm` $\rightarrow \text{dst}$ | Asynchronous Reset at $T_3$ | — | — |
-| **Hardware Interrupt** | Eval `ir_pending`; assert `IR_DISABLE` & `PC_INC_DISABLE` | Accept IRQ Sequence | Push $PCH_{\text{return}} \rightarrow \text{STACK}[\text{SP}]$, $SP \leftarrow SP + 1$ | Push $PCL_{\text{return}} \rightarrow \text{STACK}[\text{SP}]$, $SP \leftarrow SP + 1$, Pulse `~IRQ_ACK` | Clear $IE \leftarrow 0$ (Pin 09 LOW) | Load `IRQ_VECTOR[7:0] → PCH:PCL` |
+| **Q0: Register Move** | Fetch Opcode $→ IR$ | Fetch Operand $→ IR$ | Drive Bus & Writeback | Asynchronous Reset at $T_3$ | — | — |
+| **Q0: Memory Access** | Fetch Opcode $→ IR$ | Fetch Operand $→ IR$ | Drive `RAM[RegC:RegD]` | Asynchronous Reset at $T_3$ | — | — |
+| **Q0: Passive `NOP` (`0x00`)** | Fetch Opcode $→ IR$ | Fetch `0x0` Payload | Passive Idle (Buses Off) | Passive Idle (Buses Off) | Passive Idle (Buses Off) | Asynchronous Reset at $T_0$ (Natural $T_5$) |
+| **Q0: Single-Phase Escape** | Fetch Opcode $→ IR$ | Fetch Operand $→ IR$ | Execute Phase 1 Step 1 | Execute Phase 1 Step 2 | Asynchronous Reset at $T_4$ | — |
+| **Q0: Multi-Phase Escape** | Fetch Opcode $→ IR$ | Fetch Operand $→ IR$ | Phase 1: Stack Push/Pop ($SP ± 1$) | Phase 1: Stack Push/Pop ($SP ± 1$) | Phase 2: Vector / AE Restore ($SP + 1$) | AE Restore ($SP + 1$) / Async Reset @ $T_0$ |
+| **Q1 / Q3: ALU Operations** | Fetch Opcode $→ IR$ | Fetch Operand $→ IR$ | **Latch $Dst → Latch A$** (Route $Dst → Src$ decoder, disable $Dst$) | **Latch $Src/\#imm → Latch B$** (Disable $Dst$ decoder) | **Writeback $ALU\_OUT → Dst$** (Disable $Src$ decoder) | Asynchronous Reset at $T_5$ |
+| **Q2: Load Immediate** | Fetch Opcode $→ IR$ | Fetch Immediate $→ IR$ | Drive `#imm` $→ dst$ | Asynchronous Reset at $T_3$ | — | — |
+| **Hardware Interrupt** | Eval `ir_pending`; assert `IR_DISABLE` & `PC_INC_DISABLE` | Accept IRQ Sequence | Push $PCH_{return} → STACK[SP]$, $SP ← SP + 1$ | Push $PCL_{return} → STACK[SP]$, $SP ← SP + 1$, Pulse `~IRQ_ACK` | Clear $IE ← 0$ (Pin 09 LOW) | Load `IRQ_VECTOR[7:0] → PCH:PCL` |
