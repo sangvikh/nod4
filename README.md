@@ -170,4 +170,4 @@ This repository documents the NOD-4 architecture and its intended discrete-logic
 
 ## License
 
-No license has been specified yet.
+[`MIT License`](LICENCE)
