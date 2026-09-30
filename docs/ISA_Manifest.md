@@ -174,7 +174,7 @@ $$Full Source Register Address = [opr[2], opr[1:0]]$$
 | **01–03** | `+5V`, `GND`, `CLK` | Power / Clock | Input / System | Main Power Rail (+5V DC), Circuit Ground, Master Clock |
 | **04** | `HALT_STAT` | Status | Output | CPU Run/Halt & Trap State Line |
 | **05** | `~IRQ` | Interrupt | Input | Active-LOW Hardware Interrupt Request Line |
-| **06** | `~IRQ_ACK` | Interrupt | Output | Active-LOW Hardware Interrupt Acknowledge Pulse |
+| **06** | `~IRQ_ACK` | Interrupt | Output | Active-LOW Hardware Interrupt Acknowledge / IRQ-Active Level |
 | **07–10** | `CF`, `ZF`, `IE`, `UF` | Flags | Output | Carry, Zero, Interrupt Enable, and User Flag status lines |
 | **11–12** | `~MEM_OE`, `~MEM_WE` | Control | Output | Active-LOW Memory Read Output Enable / Write Enable |
 | **13–16** | `BUS[3:0]` | Data Bus | Bidirectional | Parallel 4-Bit Bidirectional Data Bus |
@@ -187,21 +187,66 @@ $$Full Source Register Address = [opr[2], opr[1:0]]$$
 ~IRQ      (Pin 05) ────┐                                    ┌───────────────────────
                        └────────────────────────────────────┘ (Peripheral Releases)
 ~IRQ_ACK  (Pin 06) ──────────────────┐             ┌───────────────────────────────
-                                     └─────────────┘ (1 T-step CPU Strobe at T3)
+                                     └─────────────┘ (IRQ_ACTIVE acknowledge window)
 IE        (Pin 09) ───────────┐
                               └────────────────────────────────────────────────────
-                                (IE cleared in RegFLAGS by CPU at T4)
+                                (IE cleared by IRQ ack at T0)
 
 ```
 
-1. **Assertion:** Peripheral pulls `~IRQ` LOW (Pin 05), setting internal `ir_pending`.
-2. **Takeover & Bus Isolation ($T_0$):** At instruction boundary $T_0$, if $IE = 1$, Central Control asserts `IR_DISABLE` (forcing `NOP` on instruction lines via passive pull-down) and asserts `PC_INC_DISABLE` to hold current return PC stable.
-3. **Execution & Acknowledgment ($T_2 … T_5$):**
-* Phase 1 ($T_2, T_3$): CPU pushes return address `PCH:PCL` to `STACK` ($T_2: STACK[SP] ← PCH$, $T_3: STACK[SP] ← PCL$), and Central Control drives a 1 $T$-step active-LOW pulse on `~IRQ_ACK` (Pin 06) at $T_3$.
-* Phase 2 ($T_4, T_5$): Clears $IE ← 0$ (Pin 09 goes LOW) at $T_4$, and loads external hardware vector `IRQ_VECTOR[7:0] → PCH:PCL` at $T_5$. Resets asynchronously at $T_0$.
+1. The peripheral asserts `~IRQ`. If `IE = 1` and no IRQ is active, the
+   IRQ card asynchronously sets its master latch.
 
+2. At `T0`, the master latch transfers to the slave:
+   `IRQ_ACTIVE ← 1`, `IE ← 0`, and `PC_INC_DISABLE` is asserted.
+   `IRQ_ACTIVE` causes the main decoder to assert `IR_DISABLE`; the disabled
+   IR outputs passively decode as `NOP`.
 
-4. **Release & Return:** Peripheral detects `~IRQ_ACK` pulse and releases `~IRQ`. Executing `RETI` pops return address and restores $IE ← 1$.
+3. The main decoder performs the IRQ entry sequence:
+
+   - `T2`: `PCH → STACK`, `SP++`
+   - `T3`: `PCL → STACK`, `SP++`
+   - `T4`: `IRQ_VECTOR_H → PCH`
+   - `T5`: `IRQ_VECTOR_L → PCL`
+
+   The master latch clears during `T5` while `CLK` is LOW. After `T5`, the
+   slave latch clears during the safe opposite clock phase.
+
+4. The slave latch drives the internal `IRQ_ACTIVE` signal. An inverter
+   drives the external active-low `~IRQ_ACK` line. The peripheral releases
+   `~IRQ` when it observes the acknowledge level. `RETI` restores `IE`;
+   `RET` preserves it.
+
+### Interrupt-Enable Ownership
+
+Interrupt-enable state belongs to the hardware IRQ entry/return protocol:
+
+```text
+Hardware IRQ entry: IE ← 0 at T0
+RETI:               IE ← 1
+RET:                IE unchanged
+SWI:                IE unchanged
+```
+
+`SWI` is therefore usable both as a software trap while interrupts remain
+enabled and as a polling/trap mechanism while software has previously
+cleared `IE`. A polling handler returns with `RET`, preserving the disabled
+state. A hardware IRQ handler returns with `RETI`, explicitly re-enabling
+hardware interrupts.
+
+The shared line is defined as:
+
+```text
+~IRQ_ACK = NOT(IRQ_ACTIVE)
+
+The internal `IRQ_ACTIVE` signal is logical 1 while the CPU is accepting the
+interrupt. An inverter drives the active-LOW backplane acknowledge line. The
+same internal state is therefore both the decoder's IRQ-entry input and the
+peripheral's acknowledge level.
+```
+
+It is an acknowledge level to the peripheral and the active-interrupt input
+to the main decoder; no separate IRQ-active wire is required.
 
 ---
 
@@ -335,7 +380,7 @@ Loads 4-bit literal `#imm[3:0]` directly into target $dst[1:0]$ in $T_2$. **Rese
 | **Q0: Memory Access** | Fetch Opcode $→ IR$ | Fetch Operand $→ IR$ | Drive `RAM[RegC:RegD]` | Asynchronous Reset at $T_3$ | — | — |
 | **Q0: Passive `NOP` (`0x00`)** | Fetch Opcode $→ IR$ | Fetch `0x0` Payload | Passive Idle (Buses Off) | Passive Idle (Buses Off) | Passive Idle (Buses Off) | Asynchronous Reset at $T_0$ (Natural $T_5$) |
 | **Q0: Single-Phase Escape** | Fetch Opcode $→ IR$ | Fetch Operand $→ IR$ | Execute Phase 1 Step 1 | Execute Phase 1 Step 2 | Asynchronous Reset at $T_4$ | — |
-| **Q0: Multi-Phase Escape** | Fetch Opcode $→ IR$ | Fetch Operand $→ IR$ | Phase 1: Stack Push/Pop ($SP ± 1$) | Phase 1: Stack Push/Pop ($SP ± 1$) | Phase 2: Vector / AE Restore ($SP + 1$) | AE Restore ($SP + 1$) / Async Reset @ $T_0$ |
-| **Q1 / Q3: ALU Operations** | Fetch Opcode $→ IR$ | Fetch Operand $→ IR$ | **Latch $Dst → Latch A$** (Route $Dst → Src$ decoder, disable $Dst$) | **Latch $Src/\#imm → Latch B$** (Disable $Dst$ decoder) | **Writeback $ALU\_OUT → Dst$** (Disable $Src$ decoder) | Asynchronous Reset at $T_5$ |
+| **Q0: Multi-Phase Escape** | Fetch Opcode $\rightarrow IR$ | Fetch Operand $\rightarrow IR$ | Phase 1: Stack Push/Pop (`SP ± 1`) | Phase 1: Stack Push/Pop (`SP ± 1`) | Phase 2: Vector high-nibble transfer / AE restore step 1 (`SP + 1`) | Phase 2: Vector low-nibble transfer / AE restore step 2 (`SP + 1`); asynchronous reset at next `T0` |
+| **Q1 / Q3: ALU Operations** | Fetch Opcode → `IR` | Fetch Operand → `IR` | **Latch `Dst` → Latch A** (route `Dst` to `Src` decoder, disable `Dst`) | **Latch `Src` / `#imm` → Latch B** (disable `Dst` decoder) | **Write back `ALU_OUT` → `Dst`** (disable `Src` decoder) | Asynchronous reset at `T5` |
 | **Q2: Load Immediate** | Fetch Opcode $→ IR$ | Fetch Immediate $→ IR$ | Drive `#imm` $→ dst$ | Asynchronous Reset at $T_3$ | — | — |
-| **Hardware Interrupt** | Eval `ir_pending`; assert `IR_DISABLE` & `PC_INC_DISABLE` | Accept IRQ Sequence | Push $PCH_{return} → STACK[SP]$, $SP ← SP + 1$ | Push $PCL_{return} → STACK[SP]$, $SP ← SP + 1$, Pulse `~IRQ_ACK` | Clear $IE ← 0$ (Pin 09 LOW) | Load `IRQ_VECTOR[7:0] → PCH:PCL` |
+| **Hardware Interrupt** | Master latch captures qualified `~IRQ ∧ IE ∧ ¬IRQ_ACTIVE` asynchronously; at `T0`, transfer to `IRQ_ACTIVE`, clear `IE`, and assert `PC_INC_DISABLE` | `IRQ_ACTIVE` causes `IR_DISABLE`; decoder enters IRQ sequence | Push $PCH_{return} \rightarrow STACK[SP]$, $SP \leftarrow SP + 1$ | Push $PCL_{return} \rightarrow STACK[SP]$, $SP \leftarrow SP + 1$; `~IRQ_ACK` remains asserted | Load `IRQ_VECTOR_H \rightarrow PCH`; `~IRQ_ACK` remains asserted | Load `IRQ_VECTOR_L \rightarrow PCL`; clear master during `T5` low phase and clear slave after `T5` |
