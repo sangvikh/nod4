@@ -362,6 +362,26 @@ Loads 4-bit literal `#imm[3:0]` directly into target $dst[1:0]$ in $T_2$. **Rese
 
 ---
 
+### Flag Update Timing
+
+`CF` and `ZF` are updated only during ALU writeback at `T4`.
+
+During `T2` and `T3`, the ALU uses the slave-visible flag values as stable
+inputs. The ALU result and newly generated flag values are written into the
+master flag latch during the `T4` writeback window. The slave flag latch is
+updated only after that writeback window, so the new `CF`/`ZF` values cannot
+feed back into the ALU during the same operation.
+
+Consequently:
+
+* ALU inputs see the flags from the preceding completed instruction;
+* `CF` and `ZF` become architecturally visible after `T4`;
+* non-ALU instructions preserve flags unless explicitly targeting `RegFLAGS`;
+* master/slave flag storage prevents carry and zero-detection race conditions
+  during writeback.
+
+---
+
 ## 6. Master Pipeline & Timestep Schedule ($T_0 … T_5$)
 
 ```text
@@ -381,6 +401,6 @@ Loads 4-bit literal `#imm[3:0]` directly into target $dst[1:0]$ in $T_2$. **Rese
 | **Q0: Passive `NOP` (`0x00`)** | Fetch Opcode $→ IR$ | Fetch `0x0` Payload | Passive Idle (Buses Off) | Passive Idle (Buses Off) | Passive Idle (Buses Off) | Asynchronous Reset at $T_0$ (Natural $T_5$) |
 | **Q0: Single-Phase Escape** | Fetch Opcode $→ IR$ | Fetch Operand $→ IR$ | Execute Phase 1 Step 1 | Execute Phase 1 Step 2 | Asynchronous Reset at $T_4$ | — |
 | **Q0: Multi-Phase Escape** | Fetch Opcode $\rightarrow IR$ | Fetch Operand $\rightarrow IR$ | Phase 1: Stack Push/Pop (`SP ± 1`) | Phase 1: Stack Push/Pop (`SP ± 1`) | Phase 2: Vector high-nibble transfer / AE restore step 1 (`SP + 1`) | Phase 2: Vector low-nibble transfer / AE restore step 2 (`SP + 1`); asynchronous reset at next `T0` |
-| **Q1 / Q3: ALU Operations** | Fetch Opcode → `IR` | Fetch Operand → `IR` | **Latch `Dst` → Latch A** (route `Dst` to `Src` decoder, disable `Dst`) | **Latch `Src` / `#imm` → Latch B** (disable `Dst` decoder) | **Write back `ALU_OUT` → `Dst`** (disable `Src` decoder) | Asynchronous reset at `T5` |
+| **Q1 / Q3: ALU Operations** | Fetch Opcode → `IR` | Fetch Operand → `IR` | **Latch `Dst` → Latch A** (route `Dst` to `Src` decoder, disable `Dst`) | **Latch `Src` / `#imm` → Latch B** (disable `Dst` decoder) | **Write back `ALU_OUT` → `Dst`; update master `CF/ZF` latch** (disable `Src` decoder) | Asynchronous reset at `T5`; slave flags update after `T4` |
 | **Q2: Load Immediate** | Fetch Opcode $→ IR$ | Fetch Immediate $→ IR$ | Drive `#imm` $→ dst$ | Asynchronous Reset at $T_3$ | — | — |
 | **Hardware Interrupt** | Master latch captures qualified `~IRQ ∧ IE ∧ ¬IRQ_ACTIVE` asynchronously; at `T0`, transfer to `IRQ_ACTIVE`, clear `IE`, and assert `PC_INC_DISABLE` | `IRQ_ACTIVE` causes `IR_DISABLE`; decoder enters IRQ sequence | Push $PCH_{return} \rightarrow STACK[SP]$, $SP \leftarrow SP + 1$ | Push $PCL_{return} \rightarrow STACK[SP]$, $SP \leftarrow SP + 1$; `~IRQ_ACK` remains asserted | Load `IRQ_VECTOR_H \rightarrow PCH`; `~IRQ_ACK` remains asserted | Load `IRQ_VECTOR_L \rightarrow PCL`; clear master during `T5` low phase and clear slave after `T5` |
