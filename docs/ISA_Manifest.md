@@ -306,7 +306,19 @@ All escapes fetch opcode at $T_0$ and operand at $T_1$. Flag conditions are eval
 
 ### Quadrant 1: Register-to-Register Binary ALU (`OPCODE = 01_dd`)
 
-Configures the ALU via 2-bit line `alu_op[1:0] = [carry_kill, inv_b]`. Operation target follows $Dst ← Dst + Src$ (or $Dst ← Src + Dst$).
+The ALU is controlled by four independent control lines:
+
+| Control line | Function |
+| --- | --- |
+| `carry_kill` | Disables carry propagation and forces the effective carry-in to `0` |
+| `inv_b` | Inverts operand `B` and inverts the selected carry-in |
+| `tap_select` | Selects the intermediate `AND` tap instead of the normal arithmetic result |
+| `carry_source` | Selects `CF` or logical `0` as the carry source |
+
+The effective carry-in is `CF XOR inv_b` when `carry_source` selects `CF`.
+When `carry_source` selects `0`, it is `0 XOR inv_b`. `carry_kill`
+overrides both cases and forces the effective carry-in to `0`.
+Operation target follows $Dst ← Dst + Src$ (or $Dst ← Src + Dst$).
 
 #### Strict Timestep Execution Sequence:
 
@@ -317,12 +329,14 @@ Configures the ALU via 2-bit line `alu_op[1:0] = [carry_kill, inv_b]`. Operation
 * **$T_4$:** Writeback $ALU\_OUT → Dst$. Disable $Src$ decoder.
 * **$T_5$:** Asynchronous Sequencer Reset triggers at the start of $T_5$, returning execution state to $T_0$.
 
-| `alu_op[1:0]` | Control `[carry_kill, inv_b]` | Mnemonic | Hardware Logic / Arithmetic Equation | Flags Updated | Active Steps | Asynchronous Reset Step |
+| Control lines `[carry_kill, inv_b, tap_select, carry_source]` | Mnemonic | Hardware Logic / Arithmetic Equation | Flags Updated | Active Steps | Asynchronous Reset Step |
 | --- | --- | --- | --- | --- | --- | --- |
-| **`00`** | `[0, 0]` | **`ADD dst, src`** | $dst ← A (dst) + B (src) + C_{in}$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
-| **`01`** | `[0, 1]` | **`SUB dst, src`** | $dst ← A (dst) + ~B (src) + ~C_in$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
-| **`10`** | `[1, 0]` | **`XOR dst, src`** | $dst ← A (dst) ⊕ B (src)$ *(Carry killed)* | $ZF$, $CF ← 0$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
-| **`11`** | `[1, 0]` *(Tap Mode)* | **`AND dst, src`** | $dst ← A (dst) ∧ B (src)$ *(Tapped from adder AND gates)* | $ZF$, $CF ← 0$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| `[0, 0, 0, 0]` | **`ADD dst, src`** | $dst ← A (dst) + B (src) + 0$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| `[0, 1, 0, 0]` | **`SUB dst, src`** | $dst ← A (dst) + ~B (src) + 1$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| `[0, 0, 0, 1]` | **`ADC dst, src`** | $dst ← A (dst) + B (src) + CF$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| `[0, 1, 0, 1]` | **`SBB dst, src`** | $dst ← A (dst) + ~B (src) + ~CF$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| `[1, 0, 0, 0]` | **`XOR dst, src`** | $dst ← A (dst) ⊕ B (src)$ | $ZF$, $CF ← 0$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| `[1, 0, 1, 0]` | **`AND dst, src`** | $dst ← A (dst) ∧ B (src)$ (selected from the adder `AND` tap) | $ZF$, $CF ← 0$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
 
 ---
 
@@ -338,7 +352,10 @@ Loads 4-bit literal `#imm[3:0]` directly into target $dst[1:0]$ in $T_2$. **Rese
 
 ### Quadrant 3: Immediate ALU, Carry Propagate & Unary/Shift Matrix (`OPCODE = 11_dd`)
 
-`EXT` bit (`opr[1]`) selects Arithmetic Mode (`EXT = 0`) or Dedicated Unary/Shift Path (`EXT = 1`).
+`EXT` bit (`opr[1]`) selects Arithmetic Mode (`EXT = 0`) or a dedicated
+path around the main ALU (`EXT = 1`). The dedicated path provides inversion
+and a wired logical right shift; it does not use the normal arithmetic
+carry chain.
 
 #### Strict Timestep Execution Sequence:
 
@@ -355,9 +372,9 @@ Loads 4-bit literal `#imm[3:0]` directly into target $dst[1:0]$ in $T_2$. **Rese
 | **`0` / `1`**` | `0` | **`0`** | `1` | **`ADDI dst, #1`** | $C_{in}$ static (`inv_b = 1`), $B = 0x1$ | $dst ← dst + 1$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
 | **`0` / `1`**` | `1` | **`0`** | `0` | **`SBB dst`** | **$C_{in} ← CF$**, $B = 0xF$ | $dst ← dst + 0xF + CF$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
 | **`0` / `1`**` | `1` | **`0`** | `1` | **`SUBI dst, #1`** | $C_{in}$ static (`inv_b = 1`), $B = 0xE$ | $dst ← dst + 0xE$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
-| **`0` / `1`**` | `0` | **`1`** | `0` | **`NOT dst`** | Unary Pass Gate | $dst ← ~dst$ | $ZF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
-| **`0` / `1`**` | `0` | **`1`** | `1` | **`SHR dst`** | Shift Logic ($0 → dst[3]$) | $dst[0] → CF$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
-| **`0` / `1`**` | `1` | **`1`** | `0` | **`RCR dst`** | Shift Logic ($CF → dst[3]$) | $dst[0] → CF$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| **`0` / `1`**` | `0` | **`1`** | `0` | **`NOT dst`** | Dedicated inverter path | $dst ← ~dst$ | $ZF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| **`0` / `1`**` | `0` | **`1`** | `1` | **`SHR dst`** | Wired logical right shift | $dst ← dst >> 1$; $dst[3] ← 0$; $CF ← dst[0]$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| **`0` / `1`**` | `1` | **`1`** | `0` | **`RCR dst`** | Wired right shift through carry | $dst ← dst >> 1$; $dst[3] ← CF$; $CF ← dst[0]$ | $ZF, CF$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
 | **`0` / `1`**` | `1` | **`1`** | `1` | **`CLR dst`** | ALU Drivers Disabled | $dst ← 0x0$ | $ZF ← 1, CF ← 0$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
 
 ---
