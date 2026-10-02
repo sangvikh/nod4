@@ -206,7 +206,7 @@ The logic standard is active-low NMOS signaling: a pulled-up 5 V level represent
 
 The full architecture and system specification is available in:
 
-- [`nod-4-microprocessor-architecture.md`](nod-4-microprocessor-architecture.md)
+- [`ISA_Manifest.md`](docs/ISA_Manifest.md)
 
 That document contains the complete register maps, pinout, timing diagrams, quadrant decode tables, instruction timing, stack sequencing, and interrupt handshake details.
 
