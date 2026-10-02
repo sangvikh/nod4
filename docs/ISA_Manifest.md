@@ -1,4 +1,4 @@
-# NOD-4 Microprocessor Architecture & System Specification (v15.5)
+# NOD-4 Microprocessor Architecture & System Specification (v16.0)
 
 **Architecture Type:** 4-Bit Cumulative Discrete NMOS Microprocessor
 
