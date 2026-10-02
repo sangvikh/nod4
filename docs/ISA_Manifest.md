@@ -380,7 +380,7 @@ For ALU operations, the main decoder selects the ALU B-source bus:
 | `[1, 0, 0, 0]` | **`XOR dst, A`** | $dst ← A (dst) ⊕ B (RegA)$ | $ZF$, $CF ← 0$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
 | `[1, 0, 0, 0]` + `OR_SELECT` | **`OR dst, A`** | $dst ← A (dst) ∨ B (RegA)$ (dedicated OR path) | $ZF$, $CF ← 0$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
 | `[1, 0, 1, 0]` | **`AND dst, A`** | $dst ← A (dst) ∧ B (RegA)$ (shared AND tap) | $ZF$, $CF ← 0$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
-| `[1, 1, 1, 1]` | **`ANDN dst, A`** | $dst ← A (dst) ∧ ~B (RegA)$ (shared AND tap with inverted B) | $ZF$, $CF ← 0$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
+| `[1, 1, 1, 0]` | **`ANDN dst, A`** | $dst ← A (dst) ∧ ~B (RegA)$ (shared AND tap with inverted B) | $ZF$, $CF ← 0$ | $T_0 … T_4$ | Resets asynchronously at $T_5$ |
 
 ---
 
@@ -472,7 +472,7 @@ Consequently:
   T0        T1        T2          T3          T4          T5
 ┌─────────┬─────────┬───────────┬───────────┬───────────┬───────────┐
 │ Fetch   │ Fetch   │ Phase 1   │ Phase 1   │ Phase 2   │ Phase 2   │
-│ Opcode  │ Operand │ Latch A   │ Latch B   │ Writeback │ Resets    │
+│ Opcode  │ Operand │ Latch B   │ Latch A   │ Writeback │ Resets    │
 └─────────┴─────────┴───────────┴───────────┴───────────┴───────────┘
  ◄─ Fetch Phase ─►   ◄────── ALU Execution ──────► ◄─ Writeback/Reset ─►
 
@@ -485,6 +485,6 @@ Consequently:
 | **Q0: Passive `NOP` (`0x00`)** | Fetch Opcode $→ IR$ | Fetch `0x0` Payload | Passive Idle (Buses Off) | Passive Idle (Buses Off) | Passive Idle (Buses Off) | Asynchronous Reset at $T_0$ (Natural $T_5$) |
 | **Q0: Single-Phase Escape** | Fetch Opcode $→ IR$ | Fetch Operand $→ IR$ | Execute Phase 1 Step 1 | Execute Phase 1 Step 2 | Asynchronous Reset at $T_4$ | — |
 | **Q0: Multi-Phase Escape** | Fetch Opcode $\rightarrow IR$ | Fetch Operand $\rightarrow IR$ | Phase 1: Stack Push/Pop (`SP ± 1`) | Phase 1: Stack Push/Pop (`SP ± 1`) | Phase 2: Vector high-nibble transfer / AE restore step 1 (`SP + 1`) | Phase 2: Vector low-nibble transfer / AE restore step 2 (`SP + 1`); asynchronous reset at next `T0` |
-| **Q1 / Q3: ALU Operations** | Fetch Opcode → `IR` | Fetch Operand → `IR` | **Latch `Dst` → Latch A** (Q1/Q3 destination selected by `SYS_DST`) | **`IMM = 0`: hardwired `RegA` → Latch B; `IMM = 1`: zero-extended `opr[0]` → Latch B; Q3 unary: Latch B unused** | **Write back `ALU_OUT` → `Dst`; update master `CF/ZF` latch** | Asynchronous reset at `T5`; slave flags update after `T4` |
+| **Q1 / Q3: ALU Operations** | Fetch Opcode → `IR` | Fetch Operand → `IR` | **Latch selected B-source bus → Latch B** (Q1: `RegA`; Q3 arithmetic: zero-extended `opr[0]`; Q3 unary: unused) | **Latch `Dst` → Latch A** (route `Dst` address to `Src` decoder, then disable `Dst`) | **Write back `ALU_OUT` → `Dst`; update master `CF/ZF` latch** | Asynchronous reset at `T5`; slave flags update after `T4` |
 | **Q2: Load Immediate** | Fetch Opcode $→ IR$ | Fetch Immediate $→ IR$ | Drive `#imm` $→ dst$ | Asynchronous Reset at $T_3$ | — | — |
 | **Hardware Interrupt** | Master latch captures qualified `~IRQ ∧ IE ∧ ¬IRQ_ACTIVE` asynchronously; at `T0`, transfer to `IRQ_ACTIVE`, clear `IE`, and assert `PC_INC_DISABLE` | `IRQ_ACTIVE` causes `IR_DISABLE`; decoder enters IRQ sequence | Push $PCH_{return} \rightarrow STACK[SP]$, $SP \leftarrow SP + 1$ | Push $PCL_{return} \rightarrow STACK[SP]$, $SP \leftarrow SP + 1$; `~IRQ_ACK` remains asserted | Load `IRQ_VECTOR_H \rightarrow PCH`; `~IRQ_ACK` remains asserted | Load `IRQ_VECTOR_L \rightarrow PCL`; clear master during `T5` low phase and clear slave after `T5` |
