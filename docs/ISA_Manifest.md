@@ -295,10 +295,10 @@ All escapes fetch opcode at $T_0$ and operand at $T_1$. Flag conditions are eval
 | **`0x04`** | **`SKP`** | `0 0 0 1` | `PC_INC` ($PC ← PC + 2$) | Idle | $T_0 … T_3$ | Resets asynchronously at $T_4$ | 0 |
 | **`0x08`** | **`GETPC`** | `0 0 1 0` | `PCH:PCL → RegA:RegB` | Idle | $T_0 … T_3$ | Resets asynchronously at $T_4$ | 0 |
 | **`0x0C`** | **`SRESET`** | `0 0 1 1` | Assert System Reset Rail | Idle | $T_0 … T_2$ | Resets asynchronously at $T_3$ | 0 |
-| **`0x11`** | **`SZ`** | `0 1 0 0` | Match: `PC_INC` ($T_2 … T_3$) | Fail: Trigger Reset | True: $T_0 … T_3$ / Fail: $T_0 … T_1$ | True: $T_4$ / Fail: $T_2$ | 0 |
-| **`0x15`** | **`SNZ`** | `0 1 0 1` | Match: `PC_INC` ($T_2 … T_3$) | Fail: Trigger Reset | True: $T_0 … T_3$ / Fail: $T_0 … T_1$ | True: $T_4$ / Fail: $T_2$ | 0 |
-| **`0x19`** | **`SC`** | `0 1 1 0` | Match: `PC_INC` ($T_2 … T_3$) | Fail: Trigger Reset | True: $T_0 … T_3$ / Fail: $T_0 … T_1$ | True: $T_4$ / Fail: $T_2$ | 0 |
-| **`0x1D`** | **`SNC`** | `0 1 1 1` | Match: `PC_INC` ($T_2 … T_3$) | Fail: Trigger Reset | True: $T_0 … T_3$ / Fail: $T_0 … T_1$ | True: $T_4$ / Fail: $T_2$ | 0 |
+| **`0x11`** | **`SZ`** | `0 1 0 0` | Match: `PC_INC` ($T_2 … T_3$) / Fail: Trigger Reset | Idle | True: $T_0 … T_3$ / Fail: $T_0 … T_1$ | True: $T_4$ / Fail: $T_2$ | 0 |
+| **`0x15`** | **`SNZ`** | `0 1 0 1` | Match: `PC_INC` ($T_2 … T_3$) / Fail: Trigger Reset | Idle | True: $T_0 … T_3$ / Fail: $T_0 … T_1$ | True: $T_4$ / Fail: $T_2$ | 0 |
+| **`0x19`** | **`SC`** | `0 1 1 0` | Match: `PC_INC` ($T_2 … T_3$) / Fail: Trigger Reset | Idle | True: $T_0 … T_3$ / Fail: $T_0 … T_1$ | True: $T_4$ / Fail: $T_2$ | 0 |
+| **`0x1D`** | **`SNC`** | `0 1 1 1` | Match: `PC_INC` ($T_2 … T_3$) / Fail: Trigger Reset | Idle | True: $T_0 … T_3$ / Fail: $T_0 … T_1$ | True: $T_4$ / Fail: $T_2$ | 0 |
 | **`0x22`** | **`RET`** | `1 0 0 0` | `STACK → PCH:PCL` & $SP ← SP - 2$ | Idle | $T_0 … T_3$ | Resets asynchronously at $T_4$ | $-2$ |
 | **`0x26`** | **`RETK`** | `1 0 0 1` | `STACK → PCH:PCL` & $SP ← SP - 2$ | AE Restore ($SP ← SP + 2$ in $T_4 … T_5$) | $T_0 … T_5$ | Resets asynchronously at $T_0$ (Natural $T_5$) | **0** |
 | **`0x2A`** | **`RETI`** | `1 0 1 0` | `STACK → PCH:PCL` & $SP ← SP - 2$ | $IE ← 1$ ($T_4$) | $T_0 … T_4$ | Resets asynchronously at $T_5$ | $-2$ |
