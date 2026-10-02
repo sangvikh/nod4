@@ -62,13 +62,38 @@ NOD-4 fetches one opcode nibble and one operand nibble per instruction.
 
 ```text
 Opcode:  [ IMM | ALU_EN | dst1 | dst0 ]
-Operand: [ SYS | ADD/SUB or Unary | EXT | IMM1/SubOp ]
+Operand: [ SYS | LOGIC/EXT | INV_B or Unary | CF/0 or Unary ]
 ```
+
+`opr[3]` selects the system destination bank in Q1 and Q3. Q2 suppresses
+that selection so all four operand bits remain available to `LDI`:
+
+```text
+SYS_DST = opr[3] AND NOT Q2
+```
+
+Q1 uses `RegA` as its implicit second operand. The Q1 operation bitmap is:
+
+| `ALU_OP` | Operation |
+| --- | --- |
+| `000` | `ADD dst, A` |
+| `001` | `ADC dst, A` |
+| `010` | `SUB dst, A` |
+| `011` | `SBB dst, A` |
+| `100` | `XOR dst, A` |
+| `101` | `OR dst, A` |
+| `110` | `AND dst, A` |
+| `111` | `ANDN dst, A` |
+
+In Q3 arithmetic mode, the main decoder routes `opr[0]` to the ALU B-source
+bus as a zero-extended one-bit operand. Q3 logic/EXT mode selects `NOT`,
+`SHR`, `SHL`, or `CLR`. The ALU itself only latches the selected B-source
+bus; immediate routing is handled by the main decoder.
 
 | Quadrant | Opcode | Purpose |
 | --- | --- | --- |
 | Q0 | `00_dd` | Register moves and diagonal control escapes |
-| Q1 | `01_dd` | Register-to-register binary ALU operations |
+| Q1 | `01_dd` | Implicit-`RegA` binary ALU operations |
 | Q2 | `10_dd` | Load immediate |
 | Q3 | `11_dd` | Immediate ALU, carry operations, unary and shift operations |
 
@@ -86,11 +111,11 @@ These instructions evaluate flags during the operand phase and either advance th
 
 ### Arithmetic and Logic
 
-`ADD`, `SUB`, `XOR`, `AND`, `ADC`, `ADDI`, `SBB`, `SUBI`, `NOT`, `CLR`
+`ADD`, `ADC`, `SUB`, `SBB`, `XOR`, `OR`, `AND`, `ANDN`, `ADDI`, `SUBI`, `NOT`, `CLR`
 
 ### Shifts and Control Transfer
 
-`SHR`, `RCR`, `JU`, `CALL`, `RET`, `RETK`, `RETI`, `PUSHPC`, `SWI`
+`SHL`, `SHR`, `JU`, `CALL`, `RET`, `RETK`, `RETI`, `PUSHPC`, `SWI`
 
 ## Timing Model
 
@@ -100,8 +125,8 @@ Each instruction progresses through a six-step microcycle:
 | --- | --- |
 | `T0` | Fetch opcode into the instruction register |
 | `T1` | Fetch operand into the instruction register |
-| `T2` | Phase 1, step 1: source/destination transfer or first stack nibble |
-| `T3` | Phase 1, step 2: second nibble transfer or second stack nibble |
+| `T2` | Q0: latch selected source; ALU: latch selected B-source bus into Latch B; Q2: complete `LDI`; or first stack nibble |
+| `T3` | ALU: latch `Dst` into Latch A and disable its decoder; or second stack nibble |
 | `T4` | Phase 2, step 1: ALU writeback, flag-master update, or vector high nibble |
 | `T5` | Phase 2, step 2: vector low nibble, final restore, and sequencer reset |
 
@@ -129,7 +154,10 @@ The physical stack depth is an implementation choice. A practical implementation
 | 1 | `IE` | Interrupt enable |
 | 0 | `UF` | User flag |
 
-`SHR RegFLAGS` and `RCR RegFLAGS` eject the user flag into carry. The following `SC` or `SNC` instruction can then conditionally skip in one cycle, enabling compact flag-driven control flow.
+`SHR RegFLAGS` ejects the user flag (`UF`) into carry, while `SHL RegFLAGS`
+ejects the most-significant flag bit (`CF`) into carry. The following `SC` or
+`SNC` instruction can then conditionally skip in one cycle, enabling compact
+flag-driven control flow.
 
 `CF` and `ZF` are committed to the master flag latch during ALU writeback at `T4`. The slave flag latch becomes visible only after the writeback window, preventing flag feedback or race conditions during the same ALU operation.
 
